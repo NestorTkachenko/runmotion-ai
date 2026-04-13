@@ -1,0 +1,69 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --foreground: 240 240 240;
+  --background: 10 10 10;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  color: rgb(var(--foreground));
+  background: rgb(var(--background));
+  font-family: 'Inter', system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Landing page gradient text */
+.gradient-text {
+  background: linear-gradient(135deg, #ffffff 0%, #a0a0a0 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.gradient-text-brand {
+  background: linear-gradient(135deg, #818cf8 0%, #38bdf8 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* Grid background pattern for landing */
+.bg-grid {
+  background-image:
+    linear-gradient(rgba(255,255,255,0.04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,255,255,0.04) 1px, transparent 1px);
+  background-size: 48px 48px;
+}
+
+/* Glow effect */
+.glow-violet {
+  box-shadow: 0 0 80px -10px rgba(139, 92, 246, 0.35);
+}
+.glow-cyan {
+  box-shadow: 0 0 80px -10px rgba(56, 189, 248, 0.30);
+}
+
+/* Status dots */
+.dot-green  { @apply w-2 h-2 rounded-full bg-green-400 inline-block; }
+.dot-red    { @apply w-2 h-2 rounded-full bg-red-400 inline-block; }
+.dot-yellow { @apply w-2 h-2 rounded-full bg-yellow-400 inline-block; }
+.dot-gray   { @apply w-2 h-2 rounded-full bg-gray-400 inline-block; }
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.15); border-radius: 3px; }
+
+/* Dashboard – light background override */
+.dashboard-body {
+  background: #f9fafb;
+  color: #111827;
+}
