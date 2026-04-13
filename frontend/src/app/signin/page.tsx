@@ -1,11 +1,11 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { Suspense, useState, useEffect } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { apiPost } from '@/lib/socket';
 
-export default function SignInPage() {
+function SignInContent() {
   const router       = useRouter();
   const searchParams = useSearchParams();
   const [mode, setMode]         = useState<'signin' | 'signup'>(
@@ -116,5 +116,19 @@ export default function SignInPage() {
         ← Back to home
       </Link>
     </div>
+  );
+}
+
+export default function SignInPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="min-h-screen bg-[#0a0a0a] flex items-center justify-center text-sm text-gray-400">
+          Loading sign in...
+        </div>
+      }
+    >
+      <SignInContent />
+    </Suspense>
   );
 }
