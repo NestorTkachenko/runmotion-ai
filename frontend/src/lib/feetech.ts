@@ -147,6 +147,18 @@ export async function resetCorrectionsAndRead(): Promise<Map<number, number>> {
 }
 
 /**
+ * Re-apply previously saved corrections (from ArmCalibration.corrections) to
+ * EEPROM.  Call this at the start of inference to restore the browser's
+ * coordinate frame if the lerobot Python client overwrote the EEPROM offsets.
+ */
+export async function applyStoredCorrections(
+  corrections: Record<number, number>,
+): Promise<void> {
+  const sdk = await getSDK();
+  await sdk.syncWritePosCorrection(corrections);
+}
+
+/**
  * Phase 2: apply homing corrections so that the neutral pose reads ~2047.
  * Saves corrections = (physicalPos - 2047) to each servo EEPROM.
  */

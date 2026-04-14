@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { Socket } from 'socket.io-client';
 import type { CameraConfig } from '@/app/dashboard/page';
-import { MOTOR_IDS, MOTOR_LABELS, writeAllPositions, readAllPositions, setTorqueAll, probeConnection, resetLimitsToFull } from '@/lib/feetech';
+import { MOTOR_IDS, MOTOR_LABELS, writeAllPositions, readAllPositions, setTorqueAll, probeConnection, resetLimitsToFull, applyStoredCorrections } from '@/lib/feetech';
 import type { ArmCalibration } from '@/app/dashboard/page';
 
 const CONTROL_HZ  = 30;
@@ -496,6 +496,15 @@ export default function Step4Inference({ socket, sdkConnected, cameraConfig, arm
     if (!cameraConfig) { addLog('Complete camera setup (Step 3) first.'); return; }
     if (credits < 1) { addLog('Insufficient credits.'); return; }
 
+    // Re-apply browser calibration EEPROM corrections before inference.
+    // The lerobot Python client overwrites servo Homing_Offset registers when it
+    // connects, so we must restore our values here or all position readings will
+    // be in the wrong coordinate frame.
+    if (armCalib?.corrections) {
+      applyStoredCorrections(armCalib.corrections)
+        .then(() => addLog('EEPROM homing corrections restored ✓'))
+        .catch((e) => addLog(`Correction restore warning: ${e.message}`));
+    }
     // Re-enable torque and reset EEPROM limits in case Step 2 left narrow limits
     setTorqueAll(true).catch((e) => addLog(`Torque enable warning: ${e.message}`));
     resetLimitsToFull().catch((e) => addLog(`Limit reset warning: ${e.message}`));
