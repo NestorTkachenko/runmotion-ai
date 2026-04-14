@@ -209,6 +209,47 @@ export default function Step2ArmCalib({ sdkConnected, onComplete }: Props) {
   const rangeOK = (id: number) => ((maxPos.get(id) ?? 0) - (minPos.get(id) ?? 4095)) >= (id === GRIPPER_ID ? GRIPPER_MIN_RANGE : MIN_RANGE);
   const allRangesOK = MOTOR_IDS.every(rangeOK);
 
+  // ── Live position debug ────────────────────────────────────────────────────
+  const TICKS_PER_DEG = 4096 / 360;
+  const [liveReadings, setLiveReadings] = useState<Map<number, { tick: number; model: number }> | null>(null);
+  const [liveReading, setLiveReading]   = useState(false);
+  const liveIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  function tickToModel(tick: number, id: number): number {
+    if (id === GRIPPER_ID) {
+      const mn = minPos.get(id) ?? 0;
+      const mx = maxPos.get(id) ?? 4095;
+      return Math.min(100, Math.max(0, ((tick - mn) / (mx - mn || 1)) * 100));
+    }
+    const offset = offsetTicks.get(id) ?? 2048;
+    return (tick - offset) / TICKS_PER_DEG;
+  }
+
+  function startLiveRead() {
+    setLiveReading(true);
+    const poll = async () => {
+      try {
+        const sdk = await getSDK();
+        const posMap: Map<number, number> = await sdk.syncReadPositions(Array.from(MOTOR_IDS));
+        const readings = new Map<number, { tick: number; model: number }>();
+        for (const id of MOTOR_IDS) {
+          const tick = posMap.get(id) ?? 0;
+          readings.set(id, { tick, model: tickToModel(tick, id) });
+        }
+        setLiveReadings(readings);
+      } catch {}
+    };
+    poll();
+    liveIntervalRef.current = setInterval(poll, 200);
+  }
+
+  function stopLiveRead() {
+    setLiveReading(false);
+    if (liveIntervalRef.current) { clearInterval(liveIntervalRef.current); liveIntervalRef.current = null; }
+  }
+
+  useEffect(() => () => { if (liveIntervalRef.current) clearInterval(liveIntervalRef.current); }, []);
+
   return (
     <div className="max-w-2xl animate-fade-in">
       <div className="mb-8">
@@ -380,6 +421,66 @@ export default function Step2ArmCalib({ sdkConnected, onComplete }: Props) {
                 ))}
               </tbody>
             </table>
+          </div>
+
+          {/* Live position debug */}
+          <div className="bg-white border border-gray-200 rounded-xl shadow-sm mb-6 overflow-hidden">
+            <div className="px-5 py-3 border-b border-gray-100 flex items-center justify-between">
+              <span className="text-sm font-semibold text-gray-800">Live position debug</span>
+              {liveReading ? (
+                <button onClick={stopLiveRead} className="text-xs text-red-500 hover:text-red-700 font-medium">Stop</button>
+              ) : (
+                <button onClick={startLiveRead} disabled={!sdkConnected} className="text-xs text-violet-600 hover:text-violet-800 font-medium disabled:opacity-40">Read live</button>
+              )}
+            </div>
+            <div className="px-5 py-2 text-xs text-gray-400 border-b border-gray-100">
+              Move the arm and watch how ticks map to model units. At reference pose all joints should read ~0°, gripper ~50%.
+            </div>
+            <table className="w-full text-xs">
+              <thead className="bg-gray-50 text-gray-500">
+                <tr>
+                  <th className="text-left px-5 py-2">Joint</th>
+                  <th className="text-right px-3 py-2">Tick</th>
+                  <th className="text-right px-3 py-2">Offset</th>
+                  <th className="text-right px-3 py-2">Δ ticks</th>
+                  <th className="text-right px-5 py-2">Model units</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {MOTOR_IDS.map((id) => {
+                  const r      = liveReadings?.get(id);
+                  const offset = offsetTicks.get(id) ?? 2048;
+                  const delta  = r ? r.tick - offset : null;
+                  const isGripper = id === GRIPPER_ID;
+                  const modelStr  = r
+                    ? isGripper
+                      ? `${r.model.toFixed(1)} / 100`
+                      : `${r.model.toFixed(1)}°`
+                    : '—';
+                  const modelColor = r
+                    ? Math.abs(r.model) < 5 || (isGripper && Math.abs(r.model - 50) < 10)
+                      ? 'text-green-600'
+                      : Math.abs(r.model) > 90
+                        ? 'text-red-500'
+                        : 'text-gray-700'
+                    : 'text-gray-300';
+                  return (
+                    <tr key={id} className="hover:bg-gray-50">
+                      <td className="px-5 py-2.5 font-medium text-gray-700">{MOTOR_LABELS[id]}</td>
+                      <td className="text-right px-3 py-2.5 font-mono text-gray-500">{r ? r.tick : '—'}</td>
+                      <td className="text-right px-3 py-2.5 font-mono text-gray-400">{offset}</td>
+                      <td className={`text-right px-3 py-2.5 font-mono ${delta !== null ? (Math.abs(delta) > 200 ? 'text-orange-500' : 'text-gray-500') : 'text-gray-300'}`}>
+                        {delta !== null ? (delta >= 0 ? `+${delta}` : delta) : '—'}
+                      </td>
+                      <td className={`text-right px-5 py-2.5 font-mono font-semibold ${modelColor}`}>{modelStr}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+            {!sdkConnected && (
+              <div className="px-5 py-2 text-xs text-amber-500 border-t border-gray-100">Connect the controller in Step 1 to enable live reading.</div>
+            )}
           </div>
 
           {/* Save to cloud */}
