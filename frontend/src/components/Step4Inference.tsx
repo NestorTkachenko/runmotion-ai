@@ -19,40 +19,38 @@ const SEND_HEIGHT = 180;
 //
 // 'calib' is optional — fall back to 2048 mid / [0,4095] range if null (pre-calibration).
 
-const LEROBOT_MAX_RES = 4095;
-const GRIPPER_IDX     = 5; // index in MOTOR_IDS array (ID=6)
+const LEROBOT_MAX_RES = 4096;  // full 12-bit range per lerobot convention
+const GRIPPER_IDX     = 5;     // index in MOTOR_IDS array (motor ID 6)
+const WRIST_ROLL_IDX  = 4;     // index in MOTOR_IDS array (motor ID 5)
+// After applyHomingCorrections the servo neutral reads ~2047 ≈ 2048.
+// lerobot DEGREES mode uses 2048 as the center — it is NOT (min+max)/2 of
+// the physical range, which varies per robot and breaks the home position.
+const JOINT_MID = 2048;
 
 type Calib = { minPositions: Record<number, number>; maxPositions: Record<number, number> } | null;
 
-function getJointMid(calib: Calib, motorIndex: number): number {
-  if (!calib) return 2048;
-  const id = motorIndex + 1; // MOTOR_IDS are 1-indexed
-  const min = calib.minPositions[id] ?? 0;
-  const max = calib.maxPositions[id] ?? 4095;
-  return (min + max) / 2;
-}
-
 // ticks → model input units  (degrees for joints 0–4, 0–100 for gripper)
-function ticksToModelUnits(ticks: number, motorIndex: number, calib: Calib): number {
+// wristMid: tick value to treat as 0° for wrist_roll (captured at inference start)
+function ticksToModelUnits(ticks: number, motorIndex: number, calib: Calib, wristMid = JOINT_MID): number {
   if (motorIndex === GRIPPER_IDX) {
     const id = motorIndex + 1;
     const min = calib?.minPositions[id] ?? 0;
     const max = calib?.maxPositions[id] ?? 4095;
     return Math.min(100, Math.max(0, ((ticks - min) / (max - min || 1)) * 100));
   }
-  const mid = getJointMid(calib, motorIndex);
+  const mid = motorIndex === WRIST_ROLL_IDX ? wristMid : JOINT_MID;
   return (ticks - mid) * 360 / LEROBOT_MAX_RES;
 }
 
 // model output units → ticks  (degrees for joints 0–4, 0–100 for gripper)
-function modelUnitsToTicks(val: number, motorIndex: number, calib: Calib): number {
+function modelUnitsToTicks(val: number, motorIndex: number, calib: Calib, wristMid = JOINT_MID): number {
   if (motorIndex === GRIPPER_IDX) {
     const id = motorIndex + 1;
     const min = calib?.minPositions[id] ?? 0;
     const max = calib?.maxPositions[id] ?? 4095;
     return Math.round(Math.max(0, Math.min(4095, (val / 100) * (max - min) + min)));
   }
-  const mid = getJointMid(calib, motorIndex);
+  const mid = motorIndex === WRIST_ROLL_IDX ? wristMid : JOINT_MID;
   return Math.round(Math.max(0, Math.min(4095, val * LEROBOT_MAX_RES / 360 + mid)));
 }
 
@@ -131,6 +129,8 @@ export default function Step4Inference({ socket, sdkConnected, cameraConfig, arm
   const waitingChunkRef   = useRef(false);
   const controlTimerRef   = useRef<ReturnType<typeof setTimeout> | null>(null);
   const taskRef           = useRef(task);
+  // Wrist roll offset: tick value at inference start → treated as 0°
+  const wristMidRef       = useRef<number>(JOINT_MID);
 
   const addLog = (msg: string) => setLog((l) => [`[${new Date().toLocaleTimeString()}] ${msg}`, ...l].slice(0, 50));
 
@@ -220,10 +220,18 @@ export default function Step4Inference({ socket, sdkConnected, cameraConfig, arm
       setStatus(s as InferenceStatus);
       if (message) { setStatusMsg(message); addLog(message); }
       if (s === 'ready') {
-        addLog('Server ready — starting inference loop.');
-        setRunning(true);
-        runningRef.current = true;
-        scheduleControlStep();
+        addLog('Server ready — zeroing wrist and starting inference loop.');
+        readAllPositions().then((ticks) => {
+          const wristTick = ticks[WRIST_ROLL_IDX] ?? JOINT_MID;
+          wristMidRef.current = wristTick;
+          addLog(`Wrist roll zeroed at tick ${wristTick}`);
+        }).catch(() => {
+          wristMidRef.current = JOINT_MID;
+        }).finally(() => {
+          setRunning(true);
+          runningRef.current = true;
+          scheduleControlStep();
+        });
       }
     };
 
@@ -235,7 +243,7 @@ export default function Step4Inference({ socket, sdkConnected, cameraConfig, arm
       // Log first action for normalization debugging
       if (actions.length > 0) {
         const a0 = actions[0];
-        const ticks0 = a0.slice(0, 6).map((v, i) => modelUnitsToTicks(v, i, armCalib));
+        const ticks0 = a0.slice(0, 6).map((v, i) => modelUnitsToTicks(v, i, armCalib, wristMidRef.current));
         addLog(`Action[0] raw (deg): [${a0.slice(0,6).map((v)=>v.toFixed(1)).join(', ')}]`);
         addLog(`Action[0] as ticks:  [${ticks0.join(', ')}]`);
       }
@@ -304,7 +312,7 @@ export default function Step4Inference({ socket, sdkConnected, cameraConfig, arm
       let state: number[] = new Array(6).fill(0);
       try {
         const ticks = await readAllPositions();
-        state = ticks.map((t, i) => ticksToModelUnits(t, i, armCalib));
+        state = ticks.map((t, i) => ticksToModelUnits(t, i, armCalib, wristMidRef.current));
         addLog(`Obs state (deg): [${state.map((v)=>v.toFixed(1)).join(', ')}]`);
       } catch {}
 
@@ -350,7 +358,7 @@ export default function Step4Inference({ socket, sdkConnected, cameraConfig, arm
 
         if (sdkConnected) {
           try {
-            const ticks = action.slice(0, 6).map((d, i) => modelUnitsToTicks(d, i, armCalib));
+            const ticks = action.slice(0, 6).map((d, i) => modelUnitsToTicks(d, i, armCalib, wristMidRef.current));
             await writeAllPositions(ticks);
           } catch (e: any) {
             addLog(`Servo write error: ${e.message}`);
@@ -589,9 +597,10 @@ export default function Step4Inference({ socket, sdkConnected, cameraConfig, arm
             onClick={async () => {
               try {
                 const ticks = await readAllPositions();
-                const degs  = ticks.map((t, i) => ticksToModelUnits(t, i, armCalib));
+                const degs  = ticks.map((t, i) => ticksToModelUnits(t, i, armCalib, wristMidRef.current));
                 addLog(`── Read positions ──`);
                 addLog(`Ticks:       [${ticks.join(', ')}]`);
+                addLog(`Wrist mid:   ${wristMidRef.current} (zeroed at inference start)`);
                 addLog(`Model units: [${degs.map((v) => v.toFixed(1)).join(', ')}]  (degs | gripper=0-100)`);
               } catch (e: any) {
                 addLog(`Read error: ${e.message}`);
