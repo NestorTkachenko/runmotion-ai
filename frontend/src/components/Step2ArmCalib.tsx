@@ -80,7 +80,7 @@ export default function Step2ArmCalib({ sdkConnected, onComplete }: Props) {
       addLog(`✓ Reference captured: [${MOTOR_IDS.map((id) => posMap.get(id) ?? 2048).join(', ')}]`);
       addLog('Now move each joint to its full range extremes.');
       setPhase('limits');
-      startMonitoring();
+      startMonitoring(posMap);
     } catch (e: any) {
       addLog(`Error: ${e.message}`);
     } finally {
@@ -88,15 +88,18 @@ export default function Step2ArmCalib({ sdkConnected, onComplete }: Props) {
     }
   }
 
-  function startMonitoring() {
+  function startMonitoring(initPositions?: Map<number, number>) {
+    // Use initPositions if provided (passed directly from handleCaptureOffset so we
+    // never rely on stale React state — setOffsetTicks is async and may not have
+    // settled yet when this function runs).
+    const seedPos = initPositions ?? new Map(MOTOR_IDS.map((id) => [id, offsetTicks.get(id) ?? 2048]));
     setMonitoring(true);
-    // Seed tracking refs so the first poll produces a zero delta
-    lastRawRef.current   = new Map(MOTOR_IDS.map((id) => [id, offsetTicks.get(id) ?? 2048]));
+    lastRawRef.current   = new Map(seedPos);
     signedPosRef.current = new Map(MOTOR_IDS.map((id) => [id, 0]));
     signedMinRef.current = new Map(MOTOR_IDS.map((id) => [id, 0]));
     signedMaxRef.current = new Map(MOTOR_IDS.map((id) => [id, 0]));
-    setMinPos(new Map(MOTOR_IDS.map((id) => [id, offsetTicks.get(id) ?? 2048])));
-    setMaxPos(new Map(MOTOR_IDS.map((id) => [id, offsetTicks.get(id) ?? 2048])));
+    setMinPos(new Map(seedPos));
+    setMaxPos(new Map(seedPos));
     addLog('Monitoring started. Move each joint to its extremes.');
 
     intervalRef.current = setInterval(async () => {
@@ -108,10 +111,9 @@ export default function Step2ArmCalib({ sdkConnected, onComplete }: Props) {
         for (const id of MOTOR_IDS) {
           const raw  = posMap.get(id) ?? (lastRawRef.current.get(id) ?? 2048);
           const prev = lastRawRef.current.get(id) ?? raw;
-          // Wrap-around correction: if the tick jumped >2048 it crossed the 0/4095 boundary
           let step = raw - prev;
-          if (step >  2048) step -= 4096;
-          if (step < -2048) step += 4096;
+          if (step >  2048) step -= 4096;  // crossed 4095→0 boundary
+          if (step < -2048) step += 4096;  // crossed 0→4095 boundary
           lastRawRef.current.set(id, raw);
 
           const newSigned = (signedPosRef.current.get(id) ?? 0) + step;
@@ -120,9 +122,9 @@ export default function Step2ArmCalib({ sdkConnected, onComplete }: Props) {
           if (newSigned > (signedMaxRef.current.get(id) ?? 0)) signedMaxRef.current.set(id, newSigned);
         }
 
-        // Convert signed deltas back to absolute ticks for storage
-        setMinPos(new Map(MOTOR_IDS.map((id) => [id, (offsetTicks.get(id) ?? 2048) + (signedMinRef.current.get(id) ?? 0)])));
-        setMaxPos(new Map(MOTOR_IDS.map((id) => [id, (offsetTicks.get(id) ?? 2048) + (signedMaxRef.current.get(id) ?? 0)])));
+        // Convert signed deltas back to absolute ticks using seedPos (not stale offsetTicks)
+        setMinPos(new Map(MOTOR_IDS.map((id) => [id, (seedPos.get(id) ?? 2048) + (signedMinRef.current.get(id) ?? 0)])));
+        setMaxPos(new Map(MOTOR_IDS.map((id) => [id, (seedPos.get(id) ?? 2048) + (signedMaxRef.current.get(id) ?? 0)])));
       } catch {}
     }, 100);
   }
@@ -368,7 +370,7 @@ export default function Step2ArmCalib({ sdkConnected, onComplete }: Props) {
             {monitoring ? (
               <button onClick={stopMonitoring} className="text-xs text-red-500 hover:text-red-700 font-medium">Stop monitoring</button>
             ) : (
-              <button onClick={startMonitoring} className="text-xs text-violet-600 hover:text-violet-800 font-medium">Start monitoring</button>
+              <button onClick={() => startMonitoring()} className="text-xs text-violet-600 hover:text-violet-800 font-medium">Start monitoring</button>
             )}
           </div>
 
