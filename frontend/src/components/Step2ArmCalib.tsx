@@ -36,6 +36,11 @@ export default function Step2ArmCalib({ sdkConnected, onComplete }: Props) {
   const [busy, setBusy]               = useState(false);
   const [log, setLog]                 = useState<string[]>([]);
   const intervalRef                   = useRef<ReturnType<typeof setInterval> | null>(null);
+  // For wrap-around tracking: last raw tick and signed cumulative delta per motor
+  const lastRawRef    = useRef<Map<number, number>>(new Map());
+  const signedPosRef  = useRef<Map<number, number>>(new Map()); // current signed position (delta from offset)
+  const signedMinRef  = useRef<Map<number, number>>(new Map()); // min signed delta from offset
+  const signedMaxRef  = useRef<Map<number, number>>(new Map()); // max signed delta from offset
 
   // Cloud calibration state
   const [token, setToken]             = useState('');
@@ -85,33 +90,39 @@ export default function Step2ArmCalib({ sdkConnected, onComplete }: Props) {
 
   function startMonitoring() {
     setMonitoring(true);
-    const initMin = new Map<number, number>(MOTOR_IDS.map((id) => [id, 4095]));
-    const initMax = new Map<number, number>(MOTOR_IDS.map((id) => [id, 0]));
-    setMinPos(initMin);
-    setMaxPos(initMax);
+    // Seed tracking refs so the first poll produces a zero delta
+    lastRawRef.current   = new Map(MOTOR_IDS.map((id) => [id, offsetTicks.get(id) ?? 2048]));
+    signedPosRef.current = new Map(MOTOR_IDS.map((id) => [id, 0]));
+    signedMinRef.current = new Map(MOTOR_IDS.map((id) => [id, 0]));
+    signedMaxRef.current = new Map(MOTOR_IDS.map((id) => [id, 0]));
+    setMinPos(new Map(MOTOR_IDS.map((id) => [id, offsetTicks.get(id) ?? 2048])));
+    setMaxPos(new Map(MOTOR_IDS.map((id) => [id, offsetTicks.get(id) ?? 2048])));
     addLog('Monitoring started. Move each joint to its extremes.');
 
     intervalRef.current = setInterval(async () => {
       try {
-        const sdk   = await getSDK();
+        const sdk    = await getSDK();
         const posMap: Map<number, number> = await sdk.syncReadPositions(Array.from(MOTOR_IDS));
         setPositions(new Map(posMap));
-        setMinPos((prev) => {
-          const next = new Map(prev);
-          for (const id of MOTOR_IDS) {
-            const v = posMap.get(id) ?? 2048;
-            if (v < (next.get(id) ?? 4095)) next.set(id, v);
-          }
-          return next;
-        });
-        setMaxPos((prev) => {
-          const next = new Map(prev);
-          for (const id of MOTOR_IDS) {
-            const v = posMap.get(id) ?? 2048;
-            if (v > (next.get(id) ?? 0)) next.set(id, v);
-          }
-          return next;
-        });
+
+        for (const id of MOTOR_IDS) {
+          const raw  = posMap.get(id) ?? (lastRawRef.current.get(id) ?? 2048);
+          const prev = lastRawRef.current.get(id) ?? raw;
+          // Wrap-around correction: if the tick jumped >2048 it crossed the 0/4095 boundary
+          let step = raw - prev;
+          if (step >  2048) step -= 4096;
+          if (step < -2048) step += 4096;
+          lastRawRef.current.set(id, raw);
+
+          const newSigned = (signedPosRef.current.get(id) ?? 0) + step;
+          signedPosRef.current.set(id, newSigned);
+          if (newSigned < (signedMinRef.current.get(id) ?? 0)) signedMinRef.current.set(id, newSigned);
+          if (newSigned > (signedMaxRef.current.get(id) ?? 0)) signedMaxRef.current.set(id, newSigned);
+        }
+
+        // Convert signed deltas back to absolute ticks for storage
+        setMinPos(new Map(MOTOR_IDS.map((id) => [id, (offsetTicks.get(id) ?? 2048) + (signedMinRef.current.get(id) ?? 0)])));
+        setMaxPos(new Map(MOTOR_IDS.map((id) => [id, (offsetTicks.get(id) ?? 2048) + (signedMaxRef.current.get(id) ?? 0)])));
       } catch {}
     }, 100);
   }
@@ -210,23 +221,19 @@ export default function Step2ArmCalib({ sdkConnected, onComplete }: Props) {
   const allRangesOK = MOTOR_IDS.every(rangeOK);
 
   // ── Live position debug ────────────────────────────────────────────────────
-  const TICKS_PER_DEG = 4096 / 360;
   const [liveReadings, setLiveReadings] = useState<Map<number, { tick: number; model: number }> | null>(null);
   const [liveReading, setLiveReading]   = useState(false);
   const liveIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   function tickToModel(tick: number, id: number): number {
-    if (id === GRIPPER_ID) {
-      const mn = minPos.get(id) ?? 0;
-      const mx = maxPos.get(id) ?? 4095;
-      return Math.min(100, Math.max(0, ((tick - mn) / (mx - mn || 1)) * 100));
-    }
-    const offset = offsetTicks.get(id) ?? 2048;
-    return (tick - offset) / TICKS_PER_DEG;
+    const mn = minPos.get(id) ?? 0;
+    const mx = maxPos.get(id) ?? 4095;
+    return Math.min(100, Math.max(0, ((tick - mn) / (mx - mn || 1)) * 100));
   }
 
-  function startLiveRead() {
+  async function startLiveRead() {
     setLiveReading(true);
+    try { await setTorqueAll(false); } catch {}
     const poll = async () => {
       try {
         const sdk = await getSDK();
@@ -243,9 +250,10 @@ export default function Step2ArmCalib({ sdkConnected, onComplete }: Props) {
     liveIntervalRef.current = setInterval(poll, 200);
   }
 
-  function stopLiveRead() {
+  async function stopLiveRead() {
     setLiveReading(false);
     if (liveIntervalRef.current) { clearInterval(liveIntervalRef.current); liveIntervalRef.current = null; }
+    try { await setTorqueAll(true); } catch {}
   }
 
   useEffect(() => () => { if (liveIntervalRef.current) clearInterval(liveIntervalRef.current); }, []);
@@ -443,7 +451,7 @@ export default function Step2ArmCalib({ sdkConnected, onComplete }: Props) {
                   <th className="text-right px-3 py-2">Tick</th>
                   <th className="text-right px-3 py-2">Offset</th>
                   <th className="text-right px-3 py-2">Δ ticks</th>
-                  <th className="text-right px-5 py-2">Model units</th>
+                  <th className="text-right px-5 py-2">Position %</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
@@ -451,16 +459,11 @@ export default function Step2ArmCalib({ sdkConnected, onComplete }: Props) {
                   const r      = liveReadings?.get(id);
                   const offset = offsetTicks.get(id) ?? 2048;
                   const delta  = r ? r.tick - offset : null;
-                  const isGripper = id === GRIPPER_ID;
-                  const modelStr  = r
-                    ? isGripper
-                      ? `${r.model.toFixed(1)} / 100`
-                      : `${r.model.toFixed(1)}°`
-                    : '—';
+                  const modelStr = r ? `${r.model.toFixed(1)}%` : '—';
                   const modelColor = r
-                    ? Math.abs(r.model) < 5 || (isGripper && Math.abs(r.model - 50) < 10)
+                    ? r.model >= 40 && r.model <= 60
                       ? 'text-green-600'
-                      : Math.abs(r.model) > 90
+                      : r.model < 5 || r.model > 95
                         ? 'text-red-500'
                         : 'text-gray-700'
                     : 'text-gray-300';
