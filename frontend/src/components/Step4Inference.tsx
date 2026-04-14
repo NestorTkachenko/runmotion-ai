@@ -11,46 +11,27 @@ const SEND_WIDTH  = 320;
 const SEND_HEIGHT = 180;
 
 // ── Unit conversion ───────────────────────────────────────────────────────────
-// Calibration stores three tick values per joint (no EEPROM writes needed):
-//   offsetTick — servo tick at the reference/neutral pose (model degree 0 → this tick)
-//   minTick    — servo tick at the physical minimum (hard stop)
-//   maxTick    — servo tick at the physical maximum (hard stop)
-//
-// degrees → ticks:  tick = degrees × (4096/360) + offsetTick,  clamped to [min, max]
-// ticks → degrees:  degrees = (tick − offsetTick) × (360/4096)
-//
-// Gripper (index 5): maps model output 0–100 linearly from minTick to maxTick.
-
-const TICKS_PER_DEG = 4096 / 360;
-const GRIPPER_IDX   = 5;   // index into MOTOR_IDS (motor ID 6)
-const FALLBACK_MID  = 2048;
+// All joints use a 0–100% scale matching the Step 2 live debug display:
+//   0%   → minTick  (physical minimum hard stop recorded during calibration)
+//   100% → maxTick  (physical maximum hard stop recorded during calibration)
+// This is arm-agnostic — no dependency on offsetTick or absolute degrees.
 
 type Calib = { offsetTicks?: Record<number, number>; minTicks: Record<number, number>; maxTicks: Record<number, number> } | null;
 
-// ticks → model input units  (degrees for joints 0–4, 0–100 for gripper)
+// ticks → 0–100% using calibrated [minTick, maxTick] range
 function ticksToModelUnits(ticks: number, motorIndex: number, calib: Calib): number {
   const id  = motorIndex + 1;
   const min = calib?.minTicks[id] ?? 0;
   const max = calib?.maxTicks[id] ?? 4095;
-  if (motorIndex === GRIPPER_IDX) {
-    return Math.min(100, Math.max(0, ((ticks - min) / (max - min || 1)) * 100));
-  }
-  const offset = calib?.offsetTicks?.[id] ?? FALLBACK_MID;
-  return (ticks - offset) / TICKS_PER_DEG;
+  return Math.min(100, Math.max(0, ((ticks - min) / (max - min || 1)) * 100));
 }
 
-// model output units → ticks  (degrees for joints 0–4, 0–100 for gripper)
-// Clamped to [minTick, maxTick] so inference can never exceed recorded limits.
+// 0–100% → ticks, clamped to [minTick, maxTick]
 function modelUnitsToTicks(val: number, motorIndex: number, calib: Calib): number {
   const id     = motorIndex + 1;
   const calMin = calib?.minTicks[id] ?? 0;
   const calMax = calib?.maxTicks[id] ?? 4095;
-  if (motorIndex === GRIPPER_IDX) {
-    const raw = (val / 100) * (calMax - calMin) + calMin;
-    return Math.round(Math.max(calMin, Math.min(calMax, raw)));
-  }
-  const offset = calib?.offsetTicks?.[id] ?? FALLBACK_MID;
-  const raw    = val * TICKS_PER_DEG + offset;
+  const raw    = (val / 100) * (calMax - calMin) + calMin;
   return Math.round(Math.max(calMin, Math.min(calMax, raw)));
 }
 
@@ -234,7 +215,7 @@ export default function Step4Inference({ socket, sdkConnected, cameraConfig, arm
       if (actions.length > 0) {
         const a0 = actions[0];
         const ticks0 = a0.slice(0, 6).map((v, i) => modelUnitsToTicks(v, i, armCalib));
-        addLog(`Action[0] raw (deg): [${a0.slice(0,6).map((v)=>v.toFixed(1)).join(', ')}]`);
+        addLog(`Action[0] raw (%): [${a0.slice(0,6).map((v)=>v.toFixed(1)).join(', ')}]`);
         addLog(`Action[0] as ticks:  [${ticks0.join(', ')}]`);
       }
     };
@@ -303,7 +284,7 @@ export default function Step4Inference({ socket, sdkConnected, cameraConfig, arm
       try {
         const ticks = await readAllPositions();
         state = ticks.map((t, i) => ticksToModelUnits(t, i, armCalib));
-        addLog(`Obs state (deg): [${state.map((v)=>v.toFixed(1)).join(', ')}]`);
+        addLog(`Obs state (%): [${state.map((v)=>v.toFixed(1)).join(', ')}]`);
       } catch {}
 
       socket.emit('obs_frame', {
@@ -352,10 +333,7 @@ export default function Step4Inference({ socket, sdkConnected, cameraConfig, arm
               const id      = i + 1;
               const calMin  = armCalib?.minTicks[id] ?? 0;
               const calMax  = armCalib?.maxTicks[id] ?? 4095;
-              const offset  = armCalib?.offsetTicks?.[id] ?? FALLBACK_MID;
-              const raw     = i === GRIPPER_IDX
-                ? (d / 100) * (calMax - calMin) + calMin
-                : d * TICKS_PER_DEG + offset;
+              const raw     = (d / 100) * (calMax - calMin) + calMin;
               const clamped = Math.round(Math.max(calMin, Math.min(calMax, raw)));
               if (Math.abs(raw - clamped) > 1) {
                 addLog(`⚠ Joint ${i+1} clamped: raw=${raw.toFixed(0)} → ${clamped} (limits [${calMin},${calMax}])`);
@@ -606,7 +584,7 @@ export default function Step4Inference({ socket, sdkConnected, cameraConfig, arm
                 const degs  = ticks.map((t, i) => ticksToModelUnits(t, i, armCalib));
                 addLog(`── Read positions ──`);
                 addLog(`Ticks:       [${ticks.join(', ')}]`);
-                addLog(`Model units: [${degs.map((v) => v.toFixed(1)).join(', ')}]  (degs | gripper=0-100)`);
+                addLog(`Model units (%): [${degs.map((v) => v.toFixed(1)).join(', ')}]`);
               } catch (e: any) {
                 addLog(`Read error: ${e.message}`);
               }
