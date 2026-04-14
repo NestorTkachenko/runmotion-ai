@@ -86,6 +86,19 @@ export default function LandingPage() {
           </Link>
         </div>
 
+        {/* Robot purchase nudge */}
+        <div className="relative mt-5 flex items-center gap-2 text-sm text-gray-500">
+          <span>Don&apos;t have an SO-ARM101 yet?</span>
+          <a
+            href="https://shop.wowrobo.com/products/so-arm101-diy-kit-assembled-version-1?variant=46588630630617"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-violet-400 hover:text-violet-300 underline underline-offset-2 transition-colors font-medium"
+          >
+            Get one for $259 →
+          </a>
+        </div>
+
         {/* Video placeholder */}
         <div className="relative mt-20 w-full max-w-4xl">
           <div className="aspect-video rounded-2xl border border-white/10 bg-white/5 backdrop-blur flex flex-col items-center justify-center glow-violet">
