@@ -30,6 +30,7 @@ export default function Step2ArmCalib({ sdkConnected, onComplete }: Props) {
   const [savedCalib,   setSavedCalib]   = useState<ArmCalibration | null>(null);
   const [liveReadings, setLiveReadings] = useState<Map<number, { tick: number; model: number }> | null>(null);
   const [liveReading,  setLiveReading]  = useState(false);
+  const [midConfirmed, setMidConfirmed] = useState(false);
   const intervalRef     = useRef<ReturnType<typeof setInterval> | null>(null);
   const liveIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const minRef          = useRef<Map<number, number>>(new Map());
@@ -213,6 +214,26 @@ export default function Step2ArmCalib({ sdkConnected, onComplete }: Props) {
       {phase === 'intro' && (
         <div className="bg-white border border-gray-200 rounded-xl shadow-sm p-6 mb-6">
           <h3 className="font-semibold text-gray-800 mb-3">Phase 1 — Set neutral position</h3>
+
+          {/* Mid-position warning */}
+          <div className="bg-amber-50 border-2 border-amber-300 rounded-xl p-4 mb-5">
+            <div className="font-semibold text-amber-800 mb-2">⚠ Position the arm at MID-RANGE before continuing</div>
+            <ul className="text-sm text-amber-700 space-y-1 list-disc list-inside mb-3">
+              <li>All joints must be roughly <strong>halfway between their physical stop limits</strong></li>
+              <li>The arm should be in an upright, relaxed, mid-range pose</li>
+              <li><strong>Do NOT start near a hard stop</strong> — motors cannot sweep the full range from there</li>
+            </ul>
+            <label className="flex items-center gap-2 text-sm font-medium text-amber-800 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={midConfirmed}
+                onChange={(e) => setMidConfirmed(e.target.checked)}
+                className="w-4 h-4 accent-amber-600"
+              />
+              I have placed the arm at mid-range on all joints
+            </label>
+          </div>
+
           <ol className="text-sm text-gray-500 space-y-1.5 list-decimal list-inside mb-5">
             <li>Move the arm to its <strong>neutral pose</strong> — mid-range on all joints, away from hard stops.</li>
             <li>Click <strong>Set Neutral</strong>. EEPROM homing corrections are written so every motor reads ~2047 at this pose.</li>
@@ -220,13 +241,16 @@ export default function Step2ArmCalib({ sdkConnected, onComplete }: Props) {
           </ol>
           <button
             onClick={handleSetNeutral}
-            disabled={busy || !sdkConnected}
+            disabled={busy || !sdkConnected || !midConfirmed}
             className="px-5 py-2 rounded-lg bg-violet-600 text-white text-sm font-medium hover:bg-violet-700 transition-colors disabled:opacity-50"
           >
             {busy ? 'Setting…' : 'Set Neutral Position'}
           </button>
           {!sdkConnected && (
             <p className="text-xs text-red-500 mt-2">Connect the controller in Step 1 first.</p>
+          )}
+          {sdkConnected && !midConfirmed && (
+            <p className="text-xs text-amber-600 mt-2">Check the box above to confirm arm position before proceeding.</p>
           )}
         </div>
       )}

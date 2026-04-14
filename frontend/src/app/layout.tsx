@@ -3,12 +3,12 @@ import './globals.css';
 import ClientProviders from '@/components/ClientProviders';
 
 export const metadata: Metadata = {
-  title: 'ARM101 — Run physical AI from your browser',
+  title: 'runmotion.ai — Run physical AI from your browser',
   description: 'Control your robot arm with state-of-the-art AI policies. No installs, no code, no GPU needed.',
   openGraph: {
-    title: 'ARM101',
+    title: 'runmotion.ai',
     description: 'Run physical AI from your browser',
-    siteName: 'ARM101',
+    siteName: 'runmotion.ai',
   },
 };
 

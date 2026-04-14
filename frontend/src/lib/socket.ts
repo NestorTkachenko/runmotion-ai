@@ -1,5 +1,5 @@
 /**
- * socket.ts  —  Socket.io client singleton for ARM101
+ * socket.ts  —  Socket.io client singleton for runmotion.ai
  *
  * Usage:
  *   import { getSocket, connectSocket, disconnectSocket } from '@/lib/socket';

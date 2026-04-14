@@ -19,7 +19,7 @@ function SignInContent() {
 
   useEffect(() => {
     // If already logged in, redirect to dashboard
-    if (typeof window !== 'undefined' && localStorage.getItem('arm101_token')) {
+    if (typeof window !== 'undefined' && localStorage.getItem('runmotion_token')) {
       router.replace('/dashboard');
     }
   }, [router]);
@@ -31,8 +31,8 @@ function SignInContent() {
     try {
       const path = mode === 'signup' ? '/auth/signup' : '/auth/login';
       const data = await apiPost<{ token: string; credits: number }>(path, { email, password });
-      localStorage.setItem('arm101_token', data.token);
-      localStorage.setItem('arm101_email', email);
+      localStorage.setItem('runmotion_token', data.token);
+      localStorage.setItem('runmotion_email', email);
       router.push('/dashboard');
     } catch (err: any) {
       setError(err.message);
@@ -50,8 +50,8 @@ function SignInContent() {
         '/auth/google',
         { credential: credentialResponse.credential },
       );
-      localStorage.setItem('arm101_token', data.token);
-      localStorage.setItem('arm101_email', data.email);
+      localStorage.setItem('runmotion_token', data.token);
+      localStorage.setItem('runmotion_email', data.email);
       router.push('/dashboard');
     } catch (err: any) {
       setError(err.message);
@@ -64,8 +64,8 @@ function SignInContent() {
     <div className="min-h-screen bg-[#0a0a0a] flex flex-col items-center justify-center px-4">
       {/* Logo */}
       <Link href="/" className="flex items-center gap-2 mb-10 text-white font-semibold text-lg">
-        <span className="w-8 h-8 rounded-lg bg-gradient-to-br from-violet-500 to-cyan-500 flex items-center justify-center text-sm font-bold">A</span>
-        ARM101
+        <span className="w-8 h-8 rounded-lg bg-gradient-to-br from-violet-500 to-cyan-500 flex items-center justify-center text-sm font-bold">R</span>
+        runmotion.ai
       </Link>
 
       {/* Card */}

@@ -54,10 +54,10 @@ export default function DashboardPage() {
   const socketRef = useRef<Socket | null>(null);
 
   useEffect(() => {
-    const token = typeof window !== 'undefined' ? localStorage.getItem('arm101_token') : null;
+    const token = typeof window !== 'undefined' ? localStorage.getItem('runmotion_token') : null;
     if (!token) { router.replace('/signin'); return; }
 
-    const storedEmail = localStorage.getItem('arm101_email') || '';
+    const storedEmail = localStorage.getItem('runmotion_email') || '';
     setEmail(storedEmail);
 
     // Connect socket
@@ -86,8 +86,8 @@ export default function DashboardPage() {
   }, []);
 
   function signOut() {
-    localStorage.removeItem('arm101_token');
-    localStorage.removeItem('arm101_email');
+    localStorage.removeItem('runmotion_token');
+    localStorage.removeItem('runmotion_email');
     socketRef.current?.disconnect();
     router.replace('/signin');
   }
@@ -97,8 +97,8 @@ export default function DashboardPage() {
       {/* ── Header ─────────────────────────────────────────────────────────── */}
       <header className="h-14 border-b border-gray-200 bg-white flex items-center justify-between px-6 shrink-0">
         <div className="flex items-center gap-2 font-semibold text-gray-900">
-          <span className="w-6 h-6 rounded-md bg-gradient-to-br from-violet-500 to-cyan-500 flex items-center justify-center text-xs font-bold text-white">A</span>
-          ARM101
+          <span className="w-6 h-6 rounded-md bg-gradient-to-br from-violet-500 to-cyan-500 flex items-center justify-center text-xs font-bold text-white">R</span>
+          runmotion.ai
         </div>
         <div className="flex items-center gap-4">
           {/* Credits badge */}

@@ -21,8 +21,8 @@ export default function LandingPage() {
         }`}
       >
         <Link href="/" className="flex items-center gap-2 font-semibold text-base tracking-tight">
-          <span className="w-6 h-6 rounded-md bg-gradient-to-br from-violet-500 to-cyan-500 flex items-center justify-center text-xs font-bold">A</span>
-          ARM101
+          <span className="w-6 h-6 rounded-md bg-gradient-to-br from-violet-500 to-cyan-500 flex items-center justify-center text-xs font-bold">R</span>
+          runmotion.ai
         </Link>
 
         <div className="hidden md:flex items-center gap-8 text-sm text-gray-400">
@@ -189,14 +189,14 @@ export default function LandingPage() {
         <div className="max-w-6xl mx-auto flex flex-col md:flex-row items-center justify-between gap-6 text-sm text-gray-500">
           <div className="flex items-center gap-2">
             <span className="w-5 h-5 rounded bg-gradient-to-br from-violet-500 to-cyan-500" />
-            <span className="font-medium text-white">ARM101</span>
+            <span className="font-medium text-white">runmotion.ai</span>
           </div>
           <div className="flex gap-6">
             <Link href="/how-it-works" className="hover:text-white transition-colors">Docs</Link>
             <Link href="/pricing" className="hover:text-white transition-colors">Pricing</Link>
             <Link href="/contact" className="hover:text-white transition-colors">Contact</Link>
           </div>
-          <div>© {new Date().getFullYear()} ARM101. All rights reserved.</div>
+          <div>© {new Date().getFullYear()} runmotion.ai. All rights reserved.</div>
         </div>
       </footer>
     </div>

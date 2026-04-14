@@ -25,13 +25,15 @@ export default function Step1Motors({ sdkConnected, onComplete }: Props) {
   const [motors, setMotors]           = useState<MotorEntry[]>(
     TARGET_IDS.map((id) => ({ targetId: id, label: MOTOR_LABELS[id], status: 'pending' })),
   );
-  const [scanning, setScanning]       = useState(false);
-  const [scanResult, setScanResult]   = useState<number[]>([]);
-  const [assigningId, setAssigningId] = useState<number | null>(null); // targetId being assigned
-  const [tempId, setTempId]           = useState<number | null>(null); // found ID to reassign
-  const [log, setLog]                 = useState<string[]>([]);
-  const [verifying, setVerifying]     = useState(false);
-  const [allVerified, setAllVerified] = useState(false);
+  const [scanning, setScanning]         = useState(false);
+  const [scanResult, setScanResult]     = useState<number[]>([]);
+  const [assigningId, setAssigningId]   = useState<number | null>(null); // targetId being assigned
+  const [tempId, setTempId]             = useState<number | null>(null); // found ID to reassign
+  const [log, setLog]                   = useState<string[]>([]);
+  const [verifying, setVerifying]       = useState(false);
+  const [allVerified, setAllVerified]   = useState(false);
+  const [verifyAttempted, setVerifyAttempted] = useState(false);
+  const [verifyFailed, setVerifyFailed] = useState(false);
 
   const addLog = (msg: string) => setLog((l) => [msg, ...l].slice(0, 20));
 
@@ -83,18 +85,22 @@ export default function Step1Motors({ sdkConnected, onComplete }: Props) {
 
   async function handleVerifyAll() {
     setVerifying(true);
+    setVerifyAttempted(true);
     addLog('Verifying all 6 motors are connected...');
     try {
       const found = await scanServos(1, 6);
       if (found.length === 6) {
         setAllVerified(true);
+        setVerifyFailed(false);
         addLog('✓ All 6 motors verified! You can proceed.');
         setMotors((prev) => prev.map((m) => ({ ...m, status: 'set' })));
       } else {
         const missing = TARGET_IDS.filter((id) => !found.includes(id));
-        addLog(`⚠ Missing IDs: ${missing.join(', ')}. Check connections and try again.`);
+        setVerifyFailed(true);
+        addLog(`⚠ Missing IDs: ${missing.join(', ')}. Check connections and assign motor IDs below.`);
       }
     } catch (e: any) {
+      setVerifyFailed(true);
       addLog(`Error: ${e.message}`);
     } finally {
       setVerifying(false);
@@ -132,91 +138,110 @@ export default function Step1Motors({ sdkConnected, onComplete }: Props) {
 
       {connected && (
         <>
-          {/* Motor status table */}
-          <div className="bg-white border border-gray-200 rounded-xl shadow-sm mb-6 overflow-hidden">
-            <div className="px-5 py-3 border-b border-gray-100 flex items-center justify-between">
-              <span className="font-semibold text-gray-800 text-sm">Motor Status</span>
-              <span className="text-xs text-gray-500">{setCount}/6 configured</span>
-            </div>
-            <div className="divide-y divide-gray-100">
-              {motors.map((m) => (
-                <div key={m.targetId} className="flex items-center justify-between px-5 py-3">
-                  <div className="flex items-center gap-3">
-                    <div className={`w-2.5 h-2.5 rounded-full ${
-                      m.status === 'set' ? 'bg-green-500' : 'bg-gray-300'
-                    }`} />
-                    <span className="text-sm text-gray-700 font-medium">ID {m.targetId}</span>
-                    <span className="text-xs text-gray-400">{m.label}</span>
-                  </div>
-                  {m.status === 'set' ? (
-                    <span className="text-xs text-green-600 font-medium">✓ Set</span>
-                  ) : (
-                    <span className="text-xs text-gray-400">Pending</span>
-                  )}
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {/* Scan + assign */}
-          {!allSet && (
-            <div className="bg-white border border-gray-200 rounded-xl shadow-sm mb-6 p-5">
-              <h3 className="font-semibold text-gray-800 text-sm mb-1">Assign next motor</h3>
+      {/* Verify all — shown first, before motor setup */}
+          {!allVerified && (
+            <div className={`rounded-xl shadow-sm mb-6 p-5 border ${verifyFailed ? 'bg-red-50 border-red-200' : 'bg-violet-50 border-violet-200'}`}>
+              <h3 className="font-semibold text-gray-800 text-sm mb-1">Verify All Motors</h3>
               <p className="text-xs text-gray-500 mb-4">
-                Plug in <strong>one motor</strong> only, then scan to find its current ID.
-                Select which joint it is and click Set ID.
+                Make sure all 6 motors are connected to the controller, then click Verify to confirm IDs 1–6 all respond.
+                If all motors are already assigned, this will let you skip directly to arm calibration.
               </p>
-              <div className="flex gap-3 mb-4">
-                <button
-                  onClick={handleScan}
-                  disabled={scanning}
-                  className="px-4 py-2 rounded-lg bg-gray-100 text-gray-700 text-sm hover:bg-gray-200 transition-colors disabled:opacity-50"
-                >
-                  {scanning ? 'Scanning…' : 'Scan for Motor'}
-                </button>
-              </div>
-
-              {scanResult.length > 0 && (
-                <div className="space-y-2">
-                  <p className="text-xs text-gray-500 mb-2">
-                    Found motor at ID(s): <strong>{scanResult.join(', ')}</strong>.
-                    Select the joint and assign it.
-                  </p>
-                  {scanResult.map((foundId) => (
-                    <div key={foundId} className="flex flex-wrap gap-2">
-                      {motors
-                        .filter((m) => m.status !== 'set')
-                        .map((m) => (
-                          <button
-                            key={m.targetId}
-                            disabled={assigningId !== null}
-                            onClick={() => handleSetId(m.targetId, foundId)}
-                            className="px-3 py-1.5 rounded-lg border border-violet-200 bg-violet-50 text-violet-700 text-xs hover:bg-violet-100 transition-colors disabled:opacity-50"
-                          >
-                            {assigningId === m.targetId ? 'Setting…' : `→ ID ${m.targetId}: ${m.label}`}
-                          </button>
-                        ))}
-                    </div>
-                  ))}
-                </div>
+              <button
+                onClick={handleVerifyAll}
+                disabled={verifying}
+                className="px-4 py-2 rounded-lg bg-violet-600 text-white text-sm font-medium hover:bg-violet-700 transition-colors disabled:opacity-50"
+              >
+                {verifying ? 'Verifying…' : 'Verify All Motors'}
+              </button>
+              {verifyFailed && (
+                <p className="text-xs text-red-600 mt-3 font-medium">
+                  ⚠ Some motors could not be found. Use the Motor Setup section below to assign IDs, then verify again.
+                </p>
               )}
             </div>
           )}
 
-          {/* Verify all */}
-          <div className="bg-white border border-gray-200 rounded-xl shadow-sm mb-6 p-5">
-            <h3 className="font-semibold text-gray-800 text-sm mb-1">Verify all 6 motors</h3>
-            <p className="text-xs text-gray-500 mb-4">
-              Connect all 6 motors to the controller, then click Verify to confirm IDs 1–6 all respond.
-            </p>
-            <button
-              onClick={handleVerifyAll}
-              disabled={verifying}
-              className="px-4 py-2 rounded-lg bg-gray-800 text-white text-sm font-medium hover:bg-gray-900 transition-colors disabled:opacity-50"
-            >
-              {verifying ? 'Verifying…' : 'Verify All Motors'}
-            </button>
-          </div>
+          {allVerified && (
+            <div className="bg-green-50 border border-green-200 rounded-xl shadow-sm mb-6 p-5">
+              <p className="text-sm font-semibold text-green-700">✓ All 6 motors verified and ready.</p>
+            </div>
+          )}
+
+          {/* Motor setup — only revealed when verify failed */}
+          {verifyFailed && !allVerified && (
+            <>
+              {/* Motor status table */}
+              <div className="bg-white border border-gray-200 rounded-xl shadow-sm mb-6 overflow-hidden">
+                <div className="px-5 py-3 border-b border-gray-100 flex items-center justify-between">
+                  <span className="font-semibold text-gray-800 text-sm">Motor Status</span>
+                  <span className="text-xs text-gray-500">{setCount}/6 configured</span>
+                </div>
+                <div className="divide-y divide-gray-100">
+                  {motors.map((m) => (
+                    <div key={m.targetId} className="flex items-center justify-between px-5 py-3">
+                      <div className="flex items-center gap-3">
+                        <div className={`w-2.5 h-2.5 rounded-full ${
+                          m.status === 'set' ? 'bg-green-500' : 'bg-gray-300'
+                        }`} />
+                        <span className="text-sm text-gray-700 font-medium">ID {m.targetId}</span>
+                        <span className="text-xs text-gray-400">{m.label}</span>
+                      </div>
+                      {m.status === 'set' ? (
+                        <span className="text-xs text-green-600 font-medium">✓ Set</span>
+                      ) : (
+                        <span className="text-xs text-gray-400">Pending</span>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Scan + assign */}
+              {!allSet && (
+                <div className="bg-white border border-gray-200 rounded-xl shadow-sm mb-6 p-5">
+                  <h3 className="font-semibold text-gray-800 text-sm mb-1">Assign next motor</h3>
+                  <p className="text-xs text-gray-500 mb-4">
+                    Plug in <strong>one motor</strong> only, then scan to find its current ID.
+                    Select which joint it is and click Set ID.
+                  </p>
+                  <div className="flex gap-3 mb-4">
+                    <button
+                      onClick={handleScan}
+                      disabled={scanning}
+                      className="px-4 py-2 rounded-lg bg-gray-100 text-gray-700 text-sm hover:bg-gray-200 transition-colors disabled:opacity-50"
+                    >
+                      {scanning ? 'Scanning…' : 'Scan for Motor'}
+                    </button>
+                  </div>
+
+                  {scanResult.length > 0 && (
+                    <div className="space-y-2">
+                      <p className="text-xs text-gray-500 mb-2">
+                        Found motor at ID(s): <strong>{scanResult.join(', ')}</strong>.
+                        Select the joint and assign it.
+                      </p>
+                      {scanResult.map((foundId) => (
+                        <div key={foundId} className="flex flex-wrap gap-2">
+                          {motors
+                            .filter((m) => m.status !== 'set')
+                            .map((m) => (
+                              <button
+                                key={m.targetId}
+                                disabled={assigningId !== null}
+                                onClick={() => handleSetId(m.targetId, foundId)}
+                                className="px-3 py-1.5 rounded-lg border border-violet-200 bg-violet-50 text-violet-700 text-xs hover:bg-violet-100 transition-colors disabled:opacity-50"
+                              >
+                                {assigningId === m.targetId ? 'Setting…' : `→ ID ${m.targetId}: ${m.label}`}
+                              </button>
+                            ))}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </>
+          )}
 
           {allVerified && (
             <button
