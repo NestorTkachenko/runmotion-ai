@@ -223,25 +223,61 @@ export default function Step2ArmCalib({ sdkConnected, onComplete }: Props) {
   // ── Live position debug ────────────────────────────────────────────────────
   const [liveReadings, setLiveReadings] = useState<Map<number, { tick: number; model: number }> | null>(null);
   const [liveReading, setLiveReading]   = useState(false);
-  const liveIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const liveIntervalRef   = useRef<ReturnType<typeof setInterval> | null>(null);
+  // Signed-accumulator refs for wrap-around-safe live position tracking
+  const liveLastRawRef    = useRef<Map<number, number>>(new Map());
+  const liveSignedPosRef  = useRef<Map<number, number>>(new Map());
 
-  function tickToModel(tick: number, id: number): number {
-    const mn = minPos.get(id) ?? 0;
-    const mx = maxPos.get(id) ?? 4095;
-    return Math.min(100, Math.max(0, ((tick - mn) / (mx - mn || 1)) * 100));
+  // Maps signed position (delta from offset) to 0–100% using calibrated range
+  function signedToModel(signedPos: number, id: number): number {
+    const mn     = minPos.get(id) ?? 0;
+    const mx     = maxPos.get(id) ?? 4095;
+    const offset = offsetTicks.get(id) ?? 2048;
+    const sMin   = mn - offset;  // signed min (can be negative)
+    const sMax   = mx - offset;  // signed max
+    return Math.min(100, Math.max(0, ((signedPos - sMin) / (sMax - sMin || 1)) * 100));
   }
+
+  // kept for internal use only (raw → signed initial seed)
+  function _rawToSignedSeed(raw: number, id: number): number {
+    const offset = offsetTicks.get(id) ?? 2048;
+    let s = raw - offset;
+    if (s >  2048) s -= 4096;
+    if (s < -2048) s += 4096;
+    return s;
+  }
+
 
   async function startLiveRead() {
     setLiveReading(true);
     try { await setTorqueAll(false); } catch {}
+
+    // Seed accumulators from current raw tick positions
+    try {
+      const sdk     = await getSDK();
+      const initMap: Map<number, number> = await sdk.syncReadPositions(Array.from(MOTOR_IDS));
+      liveLastRawRef.current   = new Map(MOTOR_IDS.map((id) => [id, initMap.get(id) ?? 2048]));
+      liveSignedPosRef.current = new Map(MOTOR_IDS.map((id) => [id, _rawToSignedSeed(initMap.get(id) ?? 2048, id)]));
+    } catch {
+      liveLastRawRef.current   = new Map(MOTOR_IDS.map((id) => [id, 2048]));
+      liveSignedPosRef.current = new Map(MOTOR_IDS.map((id) => [id, 0]));
+    }
+
     const poll = async () => {
       try {
-        const sdk = await getSDK();
+        const sdk    = await getSDK();
         const posMap: Map<number, number> = await sdk.syncReadPositions(Array.from(MOTOR_IDS));
         const readings = new Map<number, { tick: number; model: number }>();
         for (const id of MOTOR_IDS) {
-          const tick = posMap.get(id) ?? 0;
-          readings.set(id, { tick, model: tickToModel(tick, id) });
+          const raw  = posMap.get(id) ?? (liveLastRawRef.current.get(id) ?? 2048);
+          const prev = liveLastRawRef.current.get(id) ?? raw;
+          let step   = raw - prev;
+          if (step >  2048) step -= 4096;  // wrapped 4095→0
+          if (step < -2048) step += 4096;  // wrapped 0→4095
+          liveLastRawRef.current.set(id, raw);
+          const newSigned = (liveSignedPosRef.current.get(id) ?? 0) + step;
+          liveSignedPosRef.current.set(id, newSigned);
+          readings.set(id, { tick: raw, model: signedToModel(newSigned, id) });
         }
         setLiveReadings(readings);
       } catch {}
