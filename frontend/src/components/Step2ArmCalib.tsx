@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef } from 'react';
 import {
   MOTOR_IDS, MOTOR_LABELS,
-  resetCorrectionsAndRead, applyHomingCorrections, resetLimitsToFull,
+  resetCorrectionsAndRead, resetLimitsToFull,
   setTorqueAll,
 } from '@/lib/feetech';
 import type { ArmCalibration } from '@/app/dashboard/page';
@@ -20,7 +20,7 @@ interface Props {
   onComplete: (calib: ArmCalibration) => void;
 }
 
-type Phase = 'intro' | 'zeroing' | 'limits' | 'done';
+type Phase = 'intro' | 'homing' | 'limits' | 'done';
 
 const MIN_RANGE = 2000; // minimum acceptable range for most joints
 const GRIPPER_ID = 6;   // gripper has less physical range — lower threshold
@@ -31,7 +31,7 @@ export default function Step2ArmCalib({ sdkConnected, onComplete }: Props) {
   const [positions, setPositions]     = useState<Map<number, number>>(new Map());
   const [minPos, setMinPos]           = useState<Map<number, number>>(new Map());
   const [maxPos, setMaxPos]           = useState<Map<number, number>>(new Map());
-  const [corrections, setCorrections] = useState<Map<number, number>>(new Map());
+  const [homeTicks, setHomeTicks]     = useState<Map<number, number>>(new Map());
   const [monitoring, setMonitoring]   = useState(false);
   const [busy, setBusy]               = useState(false);
   const [log, setLog]                 = useState<string[]>([]);
@@ -58,22 +58,25 @@ export default function Step2ArmCalib({ sdkConnected, onComplete }: Props) {
       .catch(() => {});
   }, []);
 
-  async function handleApplyZero() {
+  async function handleCaptureHome() {
     if (!sdkConnected) { addLog('Connect controller in Step 1 first.'); return; }
     setBusy(true);
     addLog('Disabling torque on all motors…');
     try {
       await setTorqueAll(false);
-      addLog('Resetting corrections to zero…');
-      const zeroed = await resetCorrectionsAndRead();
-      addLog('Applying homing corrections (neutral → 2047)…');
-      const verified = await applyHomingCorrections();
-      const newCorr: Map<number, number> = new Map();
-      for (const id of MOTOR_IDS) newCorr.set(id, (zeroed.get(id) ?? 2047) - 2047);
-      setCorrections(newCorr);
-      setPositions(verified);
-      addLog('✓ Homing calibration applied. Now find movement limits.');
+      addLog('Zeroing EEPROM corrections (one-time)…');
+      // Zero ALL servo homing offsets so Present_Position = raw encoder value.
+      // We record the raw ticks at this neutral pose as homeTicks.
+      // No corrections are ever written back — all coordinate transforms are in software.
+      const rawPos = await resetCorrectionsAndRead();
+      const newHome = new Map<number, number>();
+      for (const id of MOTOR_IDS) newHome.set(id, rawPos.get(id) ?? 2048);
+      setHomeTicks(newHome);
+      setPositions(new Map(rawPos));
+      addLog(`✓ Home captured: [${MOTOR_IDS.map((id) => rawPos.get(id) ?? 2048).join(', ')}]`);
+      addLog('Now move each joint to its full range extremes.');
       setPhase('limits');
+      startMonitoring();
     } catch (e: any) {
       addLog(`Error: ${e.message}`);
     } finally {
@@ -142,7 +145,7 @@ export default function Step2ArmCalib({ sdkConnected, onComplete }: Props) {
 
   function handleComplete() {
     const calib: ArmCalibration = {
-      corrections:  Object.fromEntries(corrections),
+      homeTicks:    Object.fromEntries(homeTicks),
       minPositions: Object.fromEntries(minPos),
       maxPositions: Object.fromEntries(maxPos),
     };
@@ -153,7 +156,7 @@ export default function Step2ArmCalib({ sdkConnected, onComplete }: Props) {
     if (!saveName.trim() || !token) return;
     setSaveLoading(true);
     const calibData: ArmCalibration = {
-      corrections:  Object.fromEntries(corrections),
+      homeTicks:    Object.fromEntries(homeTicks),
       minPositions: Object.fromEntries(minPos),
       maxPositions: Object.fromEntries(maxPos),
     };
@@ -179,7 +182,11 @@ export default function Step2ArmCalib({ sdkConnected, onComplete }: Props) {
         `/calibrations/${id}`, token,
       );
       const c = result.data;
-      setCorrections(new Map(Object.entries(c.corrections).map(([k, v]) => [+k, v as number])));
+      if (!c.homeTicks) {
+        addLog(`⚠ "${name}" was saved with the old format — please redo calibration.`);
+        return;
+      }
+      setHomeTicks(new Map(Object.entries(c.homeTicks).map(([k, v]) => [+k, v as number])));
       setMinPos(new Map(Object.entries(c.minPositions).map(([k, v]) => [+k, v as number])));
       setMaxPos(new Map(Object.entries(c.maxPositions).map(([k, v]) => [+k, v as number])));
       setPhase('done');
@@ -215,7 +222,7 @@ export default function Step2ArmCalib({ sdkConnected, onComplete }: Props) {
       </div>
 
       {/* Saved calibrations — load a previous one to skip re-calibrating */}
-      {savedCalibrations.length > 0 && (phase === 'intro' || phase === 'zeroing') && (
+      {savedCalibrations.length > 0 && (phase === 'intro' || phase === 'homing') && (
         <div className="bg-white border border-gray-200 rounded-xl shadow-sm p-5 mb-6">
           <h3 className="font-semibold text-gray-800 text-sm mb-3">Load saved calibration</h3>
           <div className="space-y-2">
@@ -247,21 +254,21 @@ export default function Step2ArmCalib({ sdkConnected, onComplete }: Props) {
         </div>
       )}
 
-      {/* Phase: intro / zeroing */}
-      {(phase === 'intro' || phase === 'zeroing') && (
+      {/* Phase: intro / homing */}
+      {(phase === 'intro' || phase === 'homing') && (
         <div className="bg-white border border-gray-200 rounded-xl shadow-sm p-6 mb-6">
-          <h3 className="font-semibold text-gray-800 mb-2">Phase 1 — Homing correction</h3>
+          <h3 className="font-semibold text-gray-800 mb-2">Phase 1 — Capture home position</h3>
           <ol className="text-sm text-gray-500 space-y-1 list-decimal list-inside mb-5">
-            <li>Move the arm to its <strong>neutral / rest pose</strong> (arm hanging straight down or as defined by your setup).</li>
-            <li>Click <strong>Apply Zero Calibration</strong>. Torque will be disabled so you can move the arm freely.</li>
-            <li>The robot will store correction offsets so each motor reads ~2047 at this position.</li>
+            <li>Move the arm to its <strong>neutral / home pose</strong>.</li>
+            <li>Click <strong>Capture Home Position</strong>. Torque will be disabled so you can move the arm freely.</li>
+            <li>Raw servo ticks at this pose are recorded as the zero point. No EEPROM corrections are written — all transforms are pure software.</li>
           </ol>
           <button
-            onClick={handleApplyZero}
+            onClick={handleCaptureHome}
             disabled={busy || !sdkConnected}
             className="px-5 py-2 rounded-lg bg-violet-600 text-white text-sm font-medium hover:bg-violet-700 transition-colors disabled:opacity-50"
           >
-            {busy ? 'Applying…' : 'Apply Zero Calibration'}
+            {busy ? 'Capturing…' : 'Capture Home Position'}
           </button>
           {!sdkConnected && (
             <p className="text-xs text-red-500 mt-2">Connect the controller in Step 1 first.</p>
@@ -347,7 +354,7 @@ export default function Step2ArmCalib({ sdkConnected, onComplete }: Props) {
             <span className="text-green-500 text-xl">✓</span>
             <div>
               <div className="font-semibold text-green-800 text-sm">Arm calibration complete</div>
-              <div className="text-green-700 text-xs mt-1">Corrections and limits have been saved to the servo EEPROM and to your session.</div>
+              <div className="text-green-700 text-xs mt-1">Home ticks and range limits captured. EEPROM corrections zeroed — all transforms are in software.</div>
             </div>
           </div>
 
@@ -358,7 +365,7 @@ export default function Step2ArmCalib({ sdkConnected, onComplete }: Props) {
               <thead className="bg-gray-50 text-gray-500">
                 <tr>
                   <th className="text-left px-5 py-2">Joint</th>
-                  <th className="text-right px-3 py-2">Correction</th>
+                  <th className="text-right px-3 py-2">Home Tick</th>
                   <th className="text-right px-3 py-2">Min</th>
                   <th className="text-right px-3 py-2">Max</th>
                 </tr>
@@ -367,7 +374,7 @@ export default function Step2ArmCalib({ sdkConnected, onComplete }: Props) {
                 {MOTOR_IDS.map((id) => (
                   <tr key={id}>
                     <td className="px-5 py-2 font-medium text-gray-700">{MOTOR_LABELS[id]}</td>
-                    <td className="text-right px-3 py-2 font-mono text-gray-500">{corrections.get(id) ?? 0}</td>
+                    <td className="text-right px-3 py-2 font-mono text-gray-500">{homeTicks.get(id) ?? '—'}</td>
                     <td className="text-right px-3 py-2 font-mono text-gray-500">{minPos.get(id) ?? 0}</td>
                     <td className="text-right px-3 py-2 font-mono text-gray-500">{maxPos.get(id) ?? 4095}</td>
                   </tr>

@@ -19,7 +19,8 @@ export interface CameraConfig {
 }
 
 export interface ArmCalibration {
-  corrections:  Record<number, number>;
+  /** Raw servo tick at neutral pose recorded with EEPROM corrections zeroed. */
+  homeTicks:    Record<number, number>;
   minPositions: Record<number, number>;
   maxPositions: Record<number, number>;
 }

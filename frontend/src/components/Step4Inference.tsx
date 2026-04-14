@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { Socket } from 'socket.io-client';
 import type { CameraConfig } from '@/app/dashboard/page';
-import { MOTOR_IDS, MOTOR_LABELS, writeAllPositions, readAllPositions, setTorqueAll, probeConnection, resetLimitsToFull, applyStoredCorrections } from '@/lib/feetech';
+import { MOTOR_IDS, MOTOR_LABELS, writeAllPositions, readAllPositions, setTorqueAll, probeConnection, resetLimitsToFull, resetCorrectionsAndRead } from '@/lib/feetech';
 import type { ArmCalibration } from '@/app/dashboard/page';
 
 const CONTROL_HZ  = 30;
@@ -11,49 +11,43 @@ const SEND_WIDTH  = 320;
 const SEND_HEIGHT = 180;
 
 // ── Lerobot-compatible unit conversion ────────────────────────────────────────
-// lerobot DEGREES mode (body joints 0–4):   degrees = (ticks − mid) × 360 / 4095
-// lerobot RANGE_0_100 mode (gripper, idx 5): value = (ticks − min) / (max − min) × 100
-//
-// mid = (range_min + range_max) / 2 per joint, derived from ArmCalibration.
-// The gripper action from the model is 0–100; all other joints are degrees.
-//
-// 'calib' is optional — fall back to 2048 mid / [0,4095] range if null (pre-calibration).
+// Calibration records the raw servo tick at neutral pose (EEPROM corrections zeroed).
+// That tick is stored as armCalib.homeTicks[motorId] and used as the midpoint for
+// degree conversions, making the coordinate frame identical to the lerobot Python client.
+// No EEPROM corrections are ever written after initial calibration.
 
-const LEROBOT_MAX_RES = 4096;  // full 12-bit range per lerobot convention
+const LEROBOT_MAX_RES = 4096;
 const GRIPPER_IDX     = 5;     // index in MOTOR_IDS array (motor ID 6)
 const WRIST_ROLL_IDX  = 4;     // index in MOTOR_IDS array (motor ID 5)
-// After applyHomingCorrections the servo neutral reads ~2047 ≈ 2048.
-// lerobot DEGREES mode uses 2048 as the center — it is NOT (min+max)/2 of
-// the physical range, which varies per robot and breaks the home position.
-const JOINT_MID = 2048;
+const JOINT_MID       = 2048;  // fallback if homeTicks not yet recorded
 
-type Calib = { minPositions: Record<number, number>; maxPositions: Record<number, number> } | null;
+type Calib = { homeTicks?: Record<number, number>; minPositions: Record<number, number>; maxPositions: Record<number, number> } | null;
 
 // ticks → model input units  (degrees for joints 0–4, 0–100 for gripper)
-// wristMid: tick value to treat as 0° for wrist_roll (captured at inference start)
 function ticksToModelUnits(ticks: number, motorIndex: number, calib: Calib, wristMid = JOINT_MID): number {
+  const id = motorIndex + 1;
   if (motorIndex === GRIPPER_IDX) {
-    const id = motorIndex + 1;
     const min = calib?.minPositions[id] ?? 0;
     const max = calib?.maxPositions[id] ?? 4095;
     return Math.min(100, Math.max(0, ((ticks - min) / (max - min || 1)) * 100));
   }
-  const mid = motorIndex === WRIST_ROLL_IDX ? wristMid : JOINT_MID;
+  const homeTick = calib?.homeTicks?.[id] ?? JOINT_MID;
+  const mid = motorIndex === WRIST_ROLL_IDX ? wristMid : homeTick;
   return (ticks - mid) * 360 / LEROBOT_MAX_RES;
 }
 
 // model output units → ticks  (degrees for joints 0–4, 0–100 for gripper)
-// Output is clamped to the calibrated [min, max] for the joint so inference
-// commands can never exceed the limits recorded during calibration.
+// Clamped to calibrated [min, max] so inference can never exceed recorded limits.
 function modelUnitsToTicks(val: number, motorIndex: number, calib: Calib, wristMid = JOINT_MID): number {
-  const id     = motorIndex + 1;   // MOTOR_IDS = [1,2,3,4,5,6]
+  const id     = motorIndex + 1;
   const calMin = calib?.minPositions[id] ?? 0;
   const calMax = calib?.maxPositions[id] ?? 4095;
   if (motorIndex === GRIPPER_IDX) {
     const raw = (val / 100) * (calMax - calMin) + calMin;
     return Math.round(Math.max(calMin, Math.min(calMax, raw)));
   }
-  const mid = motorIndex === WRIST_ROLL_IDX ? wristMid : JOINT_MID;
+  const homeTick = calib?.homeTicks?.[id] ?? JOINT_MID;
+  const mid = motorIndex === WRIST_ROLL_IDX ? wristMid : homeTick;
   const raw = val * LEROBOT_MAX_RES / 360 + mid;
   return Math.round(Math.max(calMin, Math.min(calMax, raw)));
 }
@@ -363,8 +357,9 @@ export default function Step4Inference({ socket, sdkConnected, cameraConfig, arm
         if (sdkConnected) {
           try {
             const rawTicks = action.slice(0, 6).map((d, i) => {
-              const mid     = i === WRIST_ROLL_IDX ? wristMidRef.current : JOINT_MID;
               const id      = i + 1;
+              const homeTick = armCalib?.homeTicks?.[id] ?? JOINT_MID;
+              const mid     = i === WRIST_ROLL_IDX ? wristMidRef.current : homeTick;
               const calMin  = armCalib?.minPositions[id] ?? 0;
               const calMax  = armCalib?.maxPositions[id] ?? 4095;
               return i === GRIPPER_IDX
@@ -491,26 +486,25 @@ export default function Step4Inference({ socket, sdkConnected, cameraConfig, arm
     }
   }
 
-  function handleStart() {
+  async function handleStart() {
     if (!socket) { addLog('No socket connection.'); return; }
     if (!cameraConfig) { addLog('Complete camera setup (Step 3) first.'); return; }
     if (credits < 1) { addLog('Insufficient credits.'); return; }
-
-    // Re-apply browser calibration EEPROM corrections before inference.
-    // The lerobot Python client overwrites servo Homing_Offset registers when it
-    // connects, so we must restore our values here or all position readings will
-    // be in the wrong coordinate frame.
-    if (armCalib?.corrections) {
-      applyStoredCorrections(armCalib.corrections)
-        .then(() => addLog('EEPROM homing corrections restored ✓'))
-        .catch((e) => addLog(`Correction restore warning: ${e.message}`));
-    }
-    // Re-enable torque and reset EEPROM limits in case Step 2 left narrow limits
-    setTorqueAll(true).catch((e) => addLog(`Torque enable warning: ${e.message}`));
-    resetLimitsToFull().catch((e) => addLog(`Limit reset warning: ${e.message}`));
-
     if (!liveConnected) { addLog('Robot not connected — check USB cable.'); return; }
     if (!armCalib)       { addLog('Arm not calibrated — complete Step 2 first.'); return; }
+
+    // Zero EEPROM corrections synchronously before starting inference.
+    // Calibration records raw ticks with zeroed EEPROM, so we must ensure
+    // the same state here. This also undoes any offsets written by lerobot Python.
+    addLog('Zeroing EEPROM corrections…');
+    try {
+      await resetLimitsToFull();
+      await resetCorrectionsAndRead();
+      await setTorqueAll(true);
+      addLog('EEPROM zeroed, torque enabled ✓');
+    } catch (e: any) {
+      addLog(`EEPROM prep warning: ${e.message}`);
+    }
 
     setStatus('connecting');
     chunkBufferRef.current  = [];
@@ -606,7 +600,7 @@ export default function Step4Inference({ socket, sdkConnected, cameraConfig, arm
       ) : (
         <div className="bg-green-50 border border-green-200 rounded-xl p-3 mb-4 flex items-center gap-2 text-sm text-green-800">
           <span>✓</span>
-          <span>Calibration loaded — {Object.keys(armCalib.corrections).length} joints, limits saved.</span>
+          <span>Calibration loaded — {Object.keys(armCalib.minPositions).length} joints, limits saved.</span>
         </div>
       )}
 
