@@ -19,14 +19,11 @@ export interface CameraConfig {
 }
 
 export interface ArmCalibration {
-  /**
-   * Servo tick recorded at the reference/neutral pose (no EEPROM writes needed).
-   * Used as origin: model_degrees=0 → this tick. Scale = 4096/360 ticks per degree.
-   */
-  offsetTicks: Record<number, number>;
-  /** Physical minimum tick for each motor (recorded by moving to limit). */
+  /** Legacy field — no longer written; kept optional for backward compat. */
+  offsetTicks?: Record<number, number>;
+  /** Physical minimum tick for each motor (recorded by sweeping to limit). */
   minTicks:    Record<number, number>;
-  /** Physical maximum tick for each motor (recorded by moving to limit). */
+  /** Physical maximum tick for each motor (recorded by sweeping to limit). */
   maxTicks:    Record<number, number>;
 }
 
