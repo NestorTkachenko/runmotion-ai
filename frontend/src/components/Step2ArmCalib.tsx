@@ -230,14 +230,19 @@ export default function Step2ArmCalib({ sdkConnected, onComplete }: Props) {
   const liveLastRawRef    = useRef<Map<number, number>>(new Map());
   const liveSignedPosRef  = useRef<Map<number, number>>(new Map());
 
-  // Maps signed position (delta from offset) to 0–100% using calibrated range
+  // Maps signed position (delta from offset) to model units using calibrated range.
+  // Matches LeRobot: RANGE_M100_100 for arm joints ([-100, 100], 0 = neutral),
+  //                  RANGE_0_100    for gripper    ([  0, 100]).
   function signedToModel(signedPos: number, id: number): number {
     const mn     = minPos.get(id) ?? 0;
     const mx     = maxPos.get(id) ?? 4095;
     const offset = offsetTicks.get(id) ?? 2048;
     const sMin   = mn - offset;  // signed min (can be negative)
     const sMax   = mx - offset;  // signed max
-    return Math.min(100, Math.max(0, ((signedPos - sMin) / (sMax - sMin || 1)) * 100));
+    if (id === GRIPPER_ID) {
+      return Math.min(100, Math.max(0,    ((signedPos - sMin) / (sMax - sMin || 1)) * 100));
+    }
+    return       Math.min(100, Math.max(-100, ((signedPos - sMin) / (sMax - sMin || 1)) * 200 - 100));
   }
 
   // kept for internal use only (raw → signed initial seed)
@@ -480,7 +485,7 @@ export default function Step2ArmCalib({ sdkConnected, onComplete }: Props) {
               )}
             </div>
             <div className="px-5 py-2 text-xs text-gray-400 border-b border-gray-100">
-              Move the arm and watch how ticks map to model units. At reference pose all joints should read ~0°, gripper ~50%.
+              Move the arm and watch how ticks map to model units. Arm joints: [-100, 100] (0 = neutral). Gripper: [0, 100%].
             </div>
             <table className="w-full text-xs">
               <thead className="bg-gray-50 text-gray-500">
@@ -489,7 +494,7 @@ export default function Step2ArmCalib({ sdkConnected, onComplete }: Props) {
                   <th className="text-right px-3 py-2">Tick</th>
                   <th className="text-right px-3 py-2">Offset</th>
                   <th className="text-right px-3 py-2">Δ ticks</th>
-                  <th className="text-right px-5 py-2">Position %</th>
+                  <th className="text-right px-5 py-2">Model val</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
@@ -497,13 +502,23 @@ export default function Step2ArmCalib({ sdkConnected, onComplete }: Props) {
                   const r      = liveReadings?.get(id);
                   const offset = offsetTicks.get(id) ?? 2048;
                   const delta  = r ? r.tick - offset : null;
-                  const modelStr = r ? `${r.model.toFixed(1)}%` : '—';
+                  const modelStr = r
+                    ? id === GRIPPER_ID
+                      ? `${r.model.toFixed(1)}%`
+                      : r.model.toFixed(1)
+                    : '—';
                   const modelColor = r
-                    ? r.model >= 40 && r.model <= 60
-                      ? 'text-green-600'
-                      : r.model < 5 || r.model > 95
-                        ? 'text-red-500'
-                        : 'text-gray-700'
+                    ? id === GRIPPER_ID
+                      ? r.model >= 40 && r.model <= 60
+                        ? 'text-green-600'
+                        : r.model < 5 || r.model > 95
+                          ? 'text-red-500'
+                          : 'text-gray-700'
+                      : Math.abs(r.model) <= 10
+                        ? 'text-green-600'
+                        : Math.abs(r.model) >= 90
+                          ? 'text-red-500'
+                          : 'text-gray-700'
                     : 'text-gray-300';
                   return (
                     <tr key={id} className="hover:bg-gray-50">

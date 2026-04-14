@@ -11,39 +11,44 @@ const SEND_WIDTH  = 320;
 const SEND_HEIGHT = 180;
 
 // ── Unit conversion ───────────────────────────────────────────────────────────
-// All joints use a 0–100% scale matching the Step 2 live debug display:
-//   0%   → minTick  (physical minimum hard stop recorded during calibration)
-//   100% → maxTick  (physical maximum hard stop recorded during calibration)
-// This is arm-agnostic — no dependency on offsetTick or absolute degrees.
+// Matches LeRobot's RANGE_M100_100 / RANGE_0_100 normalization:
+//   Joints 1–5:  [-100, 100]  where -100=minTick, 0=midpoint, +100=maxTick
+//   Gripper (6): [  0, 100]   where   0=minTick,           100=maxTick
+// minTick/maxTick are virtual (can be negative when range crosses tick 0).
+
+const GRIPPER_IDX = 5;  // index into MOTOR_IDS (motor ID 6)
 
 type Calib = { offsetTicks?: Record<number, number>; minTicks: Record<number, number>; maxTicks: Record<number, number> } | null;
 
-// Calibrated ranges can have negative minTick values when a joint crossed the
-// 0-tick boundary during range discovery.  Raw servo ticks are always [0–4095]
-// so we need to find the ±4096-adjusted virtual value that lands inside [calMin, calMax].
+// Raw servo tick → virtual tick inside [calMin, calMax]  (handles 0/4095 wrap)
 function rawToVirtual(raw: number, calMin: number, calMax: number): number {
   for (const adj of [0, -4096, 4096]) {
     const v = raw + adj;
     if (v >= calMin && v <= calMax) return v;
   }
-  return raw; // fallback: clamp will handle it
+  return raw;
 }
 
-// ticks → 0–100% using calibrated [minTick, maxTick] range
+// ticks → model units  ([-100,100] for joints, [0,100] for gripper)
 function ticksToModelUnits(ticks: number, motorIndex: number, calib: Calib): number {
-  const id  = motorIndex + 1;
-  const min = calib?.minTicks[id] ?? 0;
-  const max = calib?.maxTicks[id] ?? 4095;
+  const id   = motorIndex + 1;
+  const min  = calib?.minTicks[id] ?? 0;
+  const max  = calib?.maxTicks[id] ?? 4095;
   const virt = rawToVirtual(ticks, min, max);
-  return Math.min(100, Math.max(0, ((virt - min) / (max - min || 1)) * 100));
+  if (motorIndex === GRIPPER_IDX) {
+    return Math.min(100, Math.max(0,    ((virt - min) / (max - min || 1)) * 100));
+  }
+  return       Math.min(100, Math.max(-100, ((virt - min) / (max - min || 1)) * 200 - 100));
 }
 
-// 0–100% → servo ticks [0–4095], clamped then wrapped (handles negative virtual ticks)
+// model units → servo ticks [0–4095]  (inverse of above, wraps negative virtuals)
 function modelUnitsToTicks(val: number, motorIndex: number, calib: Calib): number {
   const id      = motorIndex + 1;
   const calMin  = calib?.minTicks[id] ?? 0;
   const calMax  = calib?.maxTicks[id] ?? 4095;
-  const virtual = (val / 100) * (calMax - calMin) + calMin;
+  const virtual = motorIndex === GRIPPER_IDX
+    ? (val / 100) * (calMax - calMin) + calMin
+    : ((val + 100) / 200) * (calMax - calMin) + calMin;
   const clamped = Math.max(calMin, Math.min(calMax, virtual));
   return ((Math.round(clamped) % 4096) + 4096) % 4096;
 }
@@ -228,7 +233,7 @@ export default function Step4Inference({ socket, sdkConnected, cameraConfig, arm
       if (actions.length > 0) {
         const a0 = actions[0];
         const ticks0 = a0.slice(0, 6).map((v, i) => modelUnitsToTicks(v, i, armCalib));
-        addLog(`Action[0] raw (%): [${a0.slice(0,6).map((v)=>v.toFixed(1)).join(', ')}]`);
+      addLog(`Action[0] raw: [${a0.slice(0,6).map((v,i)=>v.toFixed(1)+(i===5?'%':'')).join(', ')}]`);
         addLog(`Action[0] as ticks:  [${ticks0.join(', ')}]`);
       }
     };
@@ -297,7 +302,7 @@ export default function Step4Inference({ socket, sdkConnected, cameraConfig, arm
       try {
         const ticks = await readAllPositions();
         state = ticks.map((t, i) => ticksToModelUnits(t, i, armCalib));
-        addLog(`Obs state (%): [${state.map((v)=>v.toFixed(1)).join(', ')}]`);
+        addLog(`Obs state: [${state.map((v, i) => v.toFixed(1) + (i === 5 ? '%' : '')).join(', ')}]  (joints -100..100, grip 0-100%)`);
       } catch {}
 
       socket.emit('obs_frame', {
@@ -346,11 +351,13 @@ export default function Step4Inference({ socket, sdkConnected, cameraConfig, arm
               const id      = i + 1;
               const calMin  = armCalib?.minTicks[id] ?? 0;
               const calMax  = armCalib?.maxTicks[id] ?? 4095;
-              const virtual = (d / 100) * (calMax - calMin) + calMin;
+              const virtual = i === GRIPPER_IDX
+                ? (d / 100) * (calMax - calMin) + calMin
+                : ((d + 100) / 200) * (calMax - calMin) + calMin;
               const clamped = Math.max(calMin, Math.min(calMax, virtual));
               const servo   = ((Math.round(clamped) % 4096) + 4096) % 4096;
               if (Math.abs(virtual - clamped) > 1) {
-                addLog(`⚠ Joint ${i+1} clamped: ${d.toFixed(1)}% → virtual=${virtual.toFixed(0)} clamped=${clamped.toFixed(0)} servo=${servo} [${calMin},${calMax}]`);
+                addLog(`⚠ Joint ${i+1} clamped: ${d.toFixed(1)} → servo=${servo} [${calMin},${calMax}]`);
               }
               return servo;
             });
