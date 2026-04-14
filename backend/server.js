@@ -34,7 +34,7 @@ const { OAuth2Client } = require('google-auth-library');
 
 const PORT              = parseInt(process.env.PORT || '3001', 10);
 const JWT_SECRET        = process.env.JWT_SECRET || 'change-in-production';
-const CORS_ORIGINS      = (process.env.CORS_ORIGINS || 'http://localhost:3000').split(',');
+const CORS_ORIGINS      = (process.env.CORS_ORIGINS || 'https://runmotion.ai,https://www.runmotion.ai,http://localhost:3000').split(',');
 const INITIAL_CREDITS   = parseInt(process.env.INITIAL_CREDITS_CENTS || '500', 10); // cents
 const MAX_PER_CONTAINER = parseInt(process.env.MAX_CLIENTS_PER_CONTAINER || '5', 10);
 const SCALE_UP_THRESHOLD = parseInt(process.env.MODAL_SCALE_UP_THRESHOLD || '4', 10);
@@ -50,7 +50,7 @@ const MODAL_LAUNCH_COOLDOWN_MS = parseInt(process.env.MODAL_LAUNCH_COOLDOWN_MS |
 // Billing: $0.15 / min = 0.25 cents/sec
 const BILLING_RATE_CENTS_PER_SEC = 0.15 / 60 * 100;
 
-const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '';
+const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '386895169996-dik1r8cmiv7gonhhs6s56rsu5lishj3q.apps.googleusercontent.com';
 
 // Parse Modal addresses from env: "addr1,addr2"
 const MODAL_ADDRESSES = (process.env.MODAL_ADDRESSES || '')
