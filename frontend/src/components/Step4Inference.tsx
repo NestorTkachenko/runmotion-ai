@@ -43,15 +43,19 @@ function ticksToModelUnits(ticks: number, motorIndex: number, calib: Calib, wris
 }
 
 // model output units → ticks  (degrees for joints 0–4, 0–100 for gripper)
+// Output is clamped to the calibrated [min, max] for the joint so inference
+// commands can never exceed the limits recorded during calibration.
 function modelUnitsToTicks(val: number, motorIndex: number, calib: Calib, wristMid = JOINT_MID): number {
+  const id     = motorIndex + 1;   // MOTOR_IDS = [1,2,3,4,5,6]
+  const calMin = calib?.minPositions[id] ?? 0;
+  const calMax = calib?.maxPositions[id] ?? 4095;
   if (motorIndex === GRIPPER_IDX) {
-    const id = motorIndex + 1;
-    const min = calib?.minPositions[id] ?? 0;
-    const max = calib?.maxPositions[id] ?? 4095;
-    return Math.round(Math.max(0, Math.min(4095, (val / 100) * (max - min) + min)));
+    const raw = (val / 100) * (calMax - calMin) + calMin;
+    return Math.round(Math.max(calMin, Math.min(calMax, raw)));
   }
   const mid = motorIndex === WRIST_ROLL_IDX ? wristMid : JOINT_MID;
-  return Math.round(Math.max(0, Math.min(4095, val * LEROBOT_MAX_RES / 360 + mid)));
+  const raw = val * LEROBOT_MAX_RES / 360 + mid;
+  return Math.round(Math.max(calMin, Math.min(calMax, raw)));
 }
 
 type InferenceStatus =
@@ -358,7 +362,25 @@ export default function Step4Inference({ socket, sdkConnected, cameraConfig, arm
 
         if (sdkConnected) {
           try {
-            const ticks = action.slice(0, 6).map((d, i) => modelUnitsToTicks(d, i, armCalib, wristMidRef.current));
+            const rawTicks = action.slice(0, 6).map((d, i) => {
+              const mid     = i === WRIST_ROLL_IDX ? wristMidRef.current : JOINT_MID;
+              const id      = i + 1;
+              const calMin  = armCalib?.minPositions[id] ?? 0;
+              const calMax  = armCalib?.maxPositions[id] ?? 4095;
+              return i === GRIPPER_IDX
+                ? (d / 100) * (calMax - calMin) + calMin
+                : d * LEROBOT_MAX_RES / 360 + mid;
+            });
+            const ticks = rawTicks.map((r, i) => {
+              const id     = i + 1;
+              const calMin = armCalib?.minPositions[id] ?? 0;
+              const calMax = armCalib?.maxPositions[id] ?? 4095;
+              const clamped = Math.round(Math.max(calMin, Math.min(calMax, r)));
+              if (Math.abs(r - clamped) > 1) {
+                addLog(`⚠ Joint ${i+1} clamped: raw=${r.toFixed(0)} → ${clamped} (limits [${calMin},${calMax}])`);
+              }
+              return clamped;
+            });
             await writeAllPositions(ticks);
           } catch (e: any) {
             addLog(`Servo write error: ${e.message}`);
