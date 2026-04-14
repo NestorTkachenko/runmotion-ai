@@ -57,8 +57,8 @@ type InferenceStatus =
 
 const STATUS_LABEL: Record<InferenceStatus, string> = {
   idle:          'Idle',
-  connecting:    'Connecting to server…',
-  loading_policy:'Loading AI policy…',
+  connecting:    'Starting inference server…',
+  loading_policy:'Loading AI policy onto GPU…',
   ready:         'Ready',
   running:       'Running inference',
   task_updated:  'Task updated',
@@ -69,8 +69,8 @@ const STATUS_LABEL: Record<InferenceStatus, string> = {
 };
 
 const ETA_HINTS: Partial<Record<InferenceStatus, string>> = {
-  connecting:    '(~2 sec on warm container)',
-  loading_policy:'(~5 sec — model pre-loaded)',
+  connecting:    'First-time start: 1–2 minutes. Subsequent starts are faster.',
+  loading_policy:'Loading model weights onto GPU… (~30 sec)',
 };
 
 interface Props {
@@ -561,6 +561,22 @@ export default function Step4Inference({ socket, sdkConnected, cameraConfig, arm
           <span className={`w-2 h-2 rounded-full ${cameraConfig ? 'bg-green-400' : 'bg-red-400'}`} />
         </div>
       </div>
+
+      {/* First-time server start banner */}
+      {(status === 'connecting' || status === 'loading_policy') && (
+        <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 mb-4">
+          <div className="flex items-start gap-3">
+            <span className="text-blue-500 text-lg mt-0.5">⏳</span>
+            <div>
+              <div className="font-semibold text-blue-800 text-sm mb-1">Starting inference server — please wait 1–2 minutes</div>
+              <div className="text-xs text-blue-600 leading-relaxed">
+                The GPU container is spinning up. This only happens the first time (or after inactivity).
+                Once warm, subsequent starts take just a few seconds. <strong>Don&apos;t close this tab.</strong>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Calibration status */}
       {!armCalib ? (

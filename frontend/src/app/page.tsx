@@ -55,7 +55,7 @@ export default function LandingPage() {
         {/* Badge */}
         <div className="relative mb-6 inline-flex items-center gap-2 rounded-full border border-violet-500/30 bg-violet-500/10 px-4 py-1.5 text-sm text-violet-300">
           <span className="w-1.5 h-1.5 rounded-full bg-violet-400 animate-pulse" />
-          Now in early access
+          Now in early access — no fine-tuning required
         </div>
 
         {/* Headline */}
@@ -67,6 +67,7 @@ export default function LandingPage() {
         <p className="relative max-w-xl text-lg md:text-xl text-gray-400 mb-10 leading-relaxed">
           No installs, no code, no GPU needed.&nbsp;
           Connect your robot arm, pick a task, and let the AI do the rest.
+          <span className="text-violet-400 font-medium"> Zero-shot — no dataset collection or fine-tuning required.</span>
         </p>
 
         {/* CTAs */}
@@ -95,6 +96,24 @@ export default function LandingPage() {
             </div>
             <p className="text-gray-500 text-sm">Demo video coming soon</p>
           </div>
+        </div>
+      </section>
+
+      {/* ── No fine-tuning callout ────────────────────────────────────────── */}
+      <section className="py-12 px-6 border-t border-white/10 bg-gradient-to-r from-violet-950/40 to-cyan-950/30">
+        <div className="max-w-4xl mx-auto flex flex-col md:flex-row items-center justify-between gap-6 text-center md:text-left">
+          <div>
+            <div className="text-2xl font-bold text-white mb-1">No fine-tuning. No pretraining. No data collection.</div>
+            <div className="text-gray-400 text-sm">
+              Our models run zero-shot on your robot. Describe the task in plain English and the AI figures out the rest.
+            </div>
+          </div>
+          <Link
+            href="/signin?mode=signup"
+            className="whitespace-nowrap px-6 py-3 rounded-lg bg-white text-black font-semibold text-sm hover:bg-gray-100 transition-colors shrink-0"
+          >
+            Try it free →
+          </Link>
         </div>
       </section>
 
@@ -135,9 +154,9 @@ export default function LandingPage() {
               body: 'Start with $5 free credits. Inference costs $0.15/min, billed only while the arm is moving.',
             },
             {
-              icon: '🌐',
-              title: 'Vercel + EC2 ready',
-              body: 'Deploy the frontend to Vercel and the backend to EC2 in minutes. Full instructions included.',
+              icon: '🧠',
+              title: 'Zero-shot, no fine-tuning',
+              body: 'Run AI policies out of the box — no dataset collection, no training runs, no pretraining on your robot. Just describe the task and go.',
             },
           ].map((f) => (
             <div

@@ -113,6 +113,66 @@ export default function Step3Camera({ onComplete }: Props) {
         </p>
       </div>
 
+      {/* Camera orientation reference */}
+      <div className="bg-blue-50 border border-blue-200 rounded-xl p-5 mb-6">
+        <h3 className="font-semibold text-blue-900 text-sm mb-3">📷 Expected camera orientations</h3>
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <div className="text-xs font-medium text-blue-800 mb-2 flex items-center gap-1.5">
+              <span className="w-2 h-2 rounded-full bg-blue-400 inline-block" />
+              Top camera — bird&apos;s-eye view of workspace
+            </div>
+            <div className="relative aspect-video rounded-lg overflow-hidden bg-blue-100 border border-blue-200">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src="/camera-ref/top.jpg"
+                alt="Top camera reference: overhead view of the workspace showing the full table area"
+                className="w-full h-full object-cover"
+                onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
+              />
+              <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                <div className="text-center text-blue-500 text-xs px-2">
+                  <div className="text-2xl mb-1">🔭</div>
+                  <div className="font-medium">Overhead view</div>
+                  <div className="text-blue-400">full workspace visible</div>
+                </div>
+              </div>
+            </div>
+            <p className="text-xs text-blue-600 mt-1.5 leading-relaxed">
+              Mounted above, looking straight down. Should show the full work surface — objects, cup, and target area all visible.
+            </p>
+          </div>
+          <div>
+            <div className="text-xs font-medium text-blue-800 mb-2 flex items-center gap-1.5">
+              <span className="w-2 h-2 rounded-full bg-orange-400 inline-block" />
+              Wrist camera — close-up gripper view
+            </div>
+            <div className="relative aspect-video rounded-lg overflow-hidden bg-orange-50 border border-orange-200">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src="/camera-ref/wrist.jpg"
+                alt="Wrist camera reference: close-up view from arm gripper looking at object being grasped"
+                className="w-full h-full object-cover"
+                onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
+              />
+              <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                <div className="text-center text-orange-500 text-xs px-2">
+                  <div className="text-2xl mb-1">🤏</div>
+                  <div className="font-medium">Gripper POV</div>
+                  <div className="text-orange-400">object close-up</div>
+                </div>
+              </div>
+            </div>
+            <p className="text-xs text-orange-700 mt-1.5 leading-relaxed">
+              Mounted on the wrist, looking forward/down. Should show the gripper fingers and the object being grasped up close.
+            </p>
+          </div>
+        </div>
+        <p className="text-xs text-blue-500 mt-3">
+          Use the rotation buttons below to orient each stream until it matches the reference above.
+        </p>
+      </div>
+
       {cameras.length === 0 ? (
         <div className="bg-white border border-gray-200 rounded-xl shadow-sm p-6 mb-6">
           <button
