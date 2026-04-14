@@ -18,21 +18,34 @@ const SEND_HEIGHT = 180;
 
 type Calib = { offsetTicks?: Record<number, number>; minTicks: Record<number, number>; maxTicks: Record<number, number> } | null;
 
+// Calibrated ranges can have negative minTick values when a joint crossed the
+// 0-tick boundary during range discovery.  Raw servo ticks are always [0–4095]
+// so we need to find the ±4096-adjusted virtual value that lands inside [calMin, calMax].
+function rawToVirtual(raw: number, calMin: number, calMax: number): number {
+  for (const adj of [0, -4096, 4096]) {
+    const v = raw + adj;
+    if (v >= calMin && v <= calMax) return v;
+  }
+  return raw; // fallback: clamp will handle it
+}
+
 // ticks → 0–100% using calibrated [minTick, maxTick] range
 function ticksToModelUnits(ticks: number, motorIndex: number, calib: Calib): number {
   const id  = motorIndex + 1;
   const min = calib?.minTicks[id] ?? 0;
   const max = calib?.maxTicks[id] ?? 4095;
-  return Math.min(100, Math.max(0, ((ticks - min) / (max - min || 1)) * 100));
+  const virt = rawToVirtual(ticks, min, max);
+  return Math.min(100, Math.max(0, ((virt - min) / (max - min || 1)) * 100));
 }
 
-// 0–100% → ticks, clamped to [minTick, maxTick]
+// 0–100% → servo ticks [0–4095], clamped then wrapped (handles negative virtual ticks)
 function modelUnitsToTicks(val: number, motorIndex: number, calib: Calib): number {
-  const id     = motorIndex + 1;
-  const calMin = calib?.minTicks[id] ?? 0;
-  const calMax = calib?.maxTicks[id] ?? 4095;
-  const raw    = (val / 100) * (calMax - calMin) + calMin;
-  return Math.round(Math.max(calMin, Math.min(calMax, raw)));
+  const id      = motorIndex + 1;
+  const calMin  = calib?.minTicks[id] ?? 0;
+  const calMax  = calib?.maxTicks[id] ?? 4095;
+  const virtual = (val / 100) * (calMax - calMin) + calMin;
+  const clamped = Math.max(calMin, Math.min(calMax, virtual));
+  return ((Math.round(clamped) % 4096) + 4096) % 4096;
 }
 
 type InferenceStatus =
@@ -333,12 +346,13 @@ export default function Step4Inference({ socket, sdkConnected, cameraConfig, arm
               const id      = i + 1;
               const calMin  = armCalib?.minTicks[id] ?? 0;
               const calMax  = armCalib?.maxTicks[id] ?? 4095;
-              const raw     = (d / 100) * (calMax - calMin) + calMin;
-              const clamped = Math.round(Math.max(calMin, Math.min(calMax, raw)));
-              if (Math.abs(raw - clamped) > 1) {
-                addLog(`⚠ Joint ${i+1} clamped: raw=${raw.toFixed(0)} → ${clamped} (limits [${calMin},${calMax}])`);
+              const virtual = (d / 100) * (calMax - calMin) + calMin;
+              const clamped = Math.max(calMin, Math.min(calMax, virtual));
+              const servo   = ((Math.round(clamped) % 4096) + 4096) % 4096;
+              if (Math.abs(virtual - clamped) > 1) {
+                addLog(`⚠ Joint ${i+1} clamped: ${d.toFixed(1)}% → virtual=${virtual.toFixed(0)} clamped=${clamped.toFixed(0)} servo=${servo} [${calMin},${calMax}]`);
               }
-              return clamped;
+              return servo;
             });
             await writeAllPositions(ticks);
           } catch (e: any) {
