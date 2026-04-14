@@ -80,3 +80,13 @@ export async function apiGet<T>(path: string, token: string): Promise<T> {
   if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
   return data as T;
 }
+
+export async function apiDelete<T>(path: string, token: string): Promise<T> {
+  const res = await fetch(`${BACKEND_URL}${path}`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+  return data as T;
+}

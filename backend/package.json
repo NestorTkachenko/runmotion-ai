@@ -13,6 +13,7 @@
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
+    "google-auth-library": "^9.10.0",
     "jsonwebtoken": "^9.0.2",
     "socket.io": "^4.7.5",
     "uuid": "^9.0.1"
@@ -21,6 +22,6 @@
     "nodemon": "^3.1.4"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=22"
   }
 }

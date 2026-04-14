@@ -7,6 +7,7 @@ import {
   setTorqueAll,
 } from '@/lib/feetech';
 import type { ArmCalibration } from '@/app/dashboard/page';
+import { apiGet, apiPost, apiDelete } from '@/lib/socket';
 
 // getSDK must be called lazily in handlers
 async function getSDK() {
@@ -36,10 +37,25 @@ export default function Step2ArmCalib({ sdkConnected, onComplete }: Props) {
   const [log, setLog]                 = useState<string[]>([]);
   const intervalRef                   = useRef<ReturnType<typeof setInterval> | null>(null);
 
+  // Cloud calibration state
+  const [token, setToken]             = useState('');
+  const [savedCalibrations, setSavedCalibrations] = useState<Array<{ id: number; name: string; created_at: number }>>([]);
+  const [saveName, setSaveName]       = useState('');
+  const [saveLoading, setSaveLoading] = useState(false);
+
   const addLog = (msg: string) => setLog((l) => [msg, ...l].slice(0, 20));
 
   useEffect(() => {
     return () => { if (intervalRef.current) clearInterval(intervalRef.current); };
+  }, []);
+
+  useEffect(() => {
+    const t = localStorage.getItem('arm101_token') || '';
+    setToken(t);
+    if (!t) return;
+    apiGet<Array<{ id: number; name: string; created_at: number }>>('/calibrations', t)
+      .then(setSavedCalibrations)
+      .catch(() => {});
   }, []);
 
   async function handleApplyZero() {
@@ -133,6 +149,57 @@ export default function Step2ArmCalib({ sdkConnected, onComplete }: Props) {
     onComplete(calib);
   }
 
+  async function handleSaveCalibration() {
+    if (!saveName.trim() || !token) return;
+    setSaveLoading(true);
+    const calibData: ArmCalibration = {
+      corrections:  Object.fromEntries(corrections),
+      minPositions: Object.fromEntries(minPos),
+      maxPositions: Object.fromEntries(maxPos),
+    };
+    try {
+      const result = await apiPost<{ id: number; name: string; created_at: number }>(
+        '/calibrations',
+        { name: saveName.trim(), data: calibData },
+      );
+      setSavedCalibrations((prev) => [result, ...prev]);
+      setSaveName('');
+      addLog('✓ Calibration saved to cloud.');
+    } catch (e: any) {
+      addLog(`Save failed: ${e.message}`);
+    } finally {
+      setSaveLoading(false);
+    }
+  }
+
+  async function handleLoadCalibration(id: number, name: string) {
+    if (!token) return;
+    try {
+      const result = await apiGet<{ id: number; name: string; data: ArmCalibration }>(
+        `/calibrations/${id}`, token,
+      );
+      const c = result.data;
+      setCorrections(new Map(Object.entries(c.corrections).map(([k, v]) => [+k, v as number])));
+      setMinPos(new Map(Object.entries(c.minPositions).map(([k, v]) => [+k, v as number])));
+      setMaxPos(new Map(Object.entries(c.maxPositions).map(([k, v]) => [+k, v as number])));
+      setPhase('done');
+      addLog(`✓ Loaded calibration "${name}".`);
+    } catch (e: any) {
+      addLog(`Load failed: ${e.message}`);
+    }
+  }
+
+  async function handleDeleteCalibration(id: number) {
+    if (!token) return;
+    try {
+      await apiDelete(`/calibrations/${id}`, token);
+      setSavedCalibrations((prev) => prev.filter((c) => c.id !== id));
+      addLog('Calibration deleted.');
+    } catch (e: any) {
+      addLog(`Delete failed: ${e.message}`);
+    }
+  }
+
   const rangeOK = (id: number) => ((maxPos.get(id) ?? 0) - (minPos.get(id) ?? 4095)) >= (id === GRIPPER_ID ? GRIPPER_MIN_RANGE : MIN_RANGE);
   const allRangesOK = MOTOR_IDS.every(rangeOK);
 
@@ -146,6 +213,39 @@ export default function Step2ArmCalib({ sdkConnected, onComplete }: Props) {
           This is a two-phase process: homing correction, then limit discovery.
         </p>
       </div>
+
+      {/* Saved calibrations — load a previous one to skip re-calibrating */}
+      {savedCalibrations.length > 0 && (phase === 'intro' || phase === 'zeroing') && (
+        <div className="bg-white border border-gray-200 rounded-xl shadow-sm p-5 mb-6">
+          <h3 className="font-semibold text-gray-800 text-sm mb-3">Load saved calibration</h3>
+          <div className="space-y-2">
+            {savedCalibrations.map((c) => (
+              <div key={c.id} className="flex items-center justify-between bg-gray-50 rounded-lg px-4 py-2.5">
+                <div>
+                  <span className="text-sm font-medium text-gray-800">{c.name}</span>
+                  <span className="text-xs text-gray-400 ml-2">
+                    {new Date(c.created_at * 1000).toLocaleDateString()}
+                  </span>
+                </div>
+                <div className="flex gap-3">
+                  <button
+                    onClick={() => handleLoadCalibration(c.id, c.name)}
+                    className="text-xs text-violet-600 hover:text-violet-800 font-medium"
+                  >
+                    Load
+                  </button>
+                  <button
+                    onClick={() => handleDeleteCalibration(c.id)}
+                    className="text-xs text-red-400 hover:text-red-600 font-medium"
+                  >
+                    Delete
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Phase: intro / zeroing */}
       {(phase === 'intro' || phase === 'zeroing') && (
@@ -275,6 +375,30 @@ export default function Step2ArmCalib({ sdkConnected, onComplete }: Props) {
               </tbody>
             </table>
           </div>
+
+          {/* Save to cloud */}
+          {token && (
+            <div className="bg-white border border-gray-200 rounded-xl shadow-sm p-5 mb-4">
+              <h3 className="font-semibold text-gray-800 text-sm mb-3">Save calibration to cloud</h3>
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={saveName}
+                  onChange={(e) => setSaveName(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && handleSaveCalibration()}
+                  placeholder="e.g. Living room setup"
+                  className="flex-1 border border-gray-200 rounded-lg px-3 py-2 text-sm focus:border-violet-400 focus:outline-none"
+                />
+                <button
+                  onClick={handleSaveCalibration}
+                  disabled={!saveName.trim() || saveLoading}
+                  className="px-4 py-2 rounded-lg bg-violet-600 text-white text-sm font-medium hover:bg-violet-700 transition-colors disabled:opacity-50"
+                >
+                  {saveLoading ? 'Saving…' : 'Save'}
+                </button>
+              </div>
+            </div>
+          )}
 
           <button
             onClick={handleComplete}

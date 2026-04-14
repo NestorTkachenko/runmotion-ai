@@ -23,9 +23,12 @@ const jwt       = require('jsonwebtoken');
 const bcrypt    = require('bcryptjs');
 const net       = require('net');
 const path      = require('path');
+const fs        = require('fs');
 const { spawn } = require('child_process');
 const { encode: msgpackEncode, decode: msgpackDecode } = require('@msgpack/msgpack');
 const { v4: uuidv4 } = require('uuid');
+const { DatabaseSync } = require('node:sqlite');
+const { OAuth2Client } = require('google-auth-library');
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
@@ -47,16 +50,49 @@ const MODAL_LAUNCH_COOLDOWN_MS = parseInt(process.env.MODAL_LAUNCH_COOLDOWN_MS |
 // Billing: $0.15 / min = 0.25 cents/sec
 const BILLING_RATE_CENTS_PER_SEC = 0.15 / 60 * 100;
 
+const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '';
+
 // Parse Modal addresses from env: "addr1,addr2"
 const MODAL_ADDRESSES = (process.env.MODAL_ADDRESSES || '')
   .split(',')
   .map(s => s.trim())
   .filter(Boolean);
 
-// ── In-memory stores (use Redis/Postgres in production) ───────────────────────
+// ── SQLite persistent store ───────────────────────────────────────────────────
 
-/** @type {Map<string, {hashedPassword: string, credits: number, email: string}>} */
-const users = new Map();
+const DATA_DIR = path.join(__dirname, 'data');
+fs.mkdirSync(DATA_DIR, { recursive: true });
+
+const db = new DatabaseSync(path.join(DATA_DIR, 'db.sqlite'));
+db.exec('PRAGMA journal_mode = WAL');
+db.exec('PRAGMA foreign_keys = ON');
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS users (
+    email           TEXT PRIMARY KEY,
+    hashed_password TEXT,
+    credits         REAL NOT NULL,
+    provider        TEXT NOT NULL DEFAULT 'email',
+    created_at      INTEGER NOT NULL DEFAULT (unixepoch())
+  );
+  CREATE TABLE IF NOT EXISTS calibrations (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    email      TEXT NOT NULL REFERENCES users(email) ON DELETE CASCADE,
+    name       TEXT NOT NULL,
+    data       TEXT NOT NULL,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch())
+  );
+`);
+
+const dbGetUser           = db.prepare('SELECT * FROM users WHERE email = ?');
+const dbCreateUser        = db.prepare('INSERT INTO users (email, hashed_password, credits, provider) VALUES (?, ?, ?, ?)');
+const dbUpdateCredits     = db.prepare('UPDATE users SET credits = ? WHERE email = ?');
+const dbGetCalibrations   = db.prepare('SELECT id, name, created_at FROM calibrations WHERE email = ? ORDER BY created_at DESC');
+const dbGetCalibration    = db.prepare('SELECT * FROM calibrations WHERE id = ? AND email = ?');
+const dbSaveCalibration   = db.prepare('INSERT INTO calibrations (email, name, data) VALUES (?, ?, ?)');
+const dbDeleteCalibration = db.prepare('DELETE FROM calibrations WHERE id = ? AND email = ?');
+
+const googleOAuthClient = GOOGLE_CLIENT_ID ? new OAuth2Client(GOOGLE_CLIENT_ID) : null;
 
 /**
  * @type {Map<string, {
@@ -67,6 +103,7 @@ const users = new Map();
  *   inferenceActive: boolean,
  *   billingStartTime: number|null,
  *   billingInterval: NodeJS.Timeout|null,
+ *   billTick: number,
  *   modalClient: ModalClient|null,
  *   armCalibration: object|null,
  *   cameraConfig: object|null,
@@ -102,7 +139,7 @@ app.use((req, res, next) => {
   if (!origin || CORS_ORIGINS.includes(origin) || CORS_ORIGINS.includes('*')) {
     res.setHeader('Access-Control-Allow-Origin', origin || '*');
   }
-  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,DELETE,OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Authorization');
   if (req.method === 'OPTIONS') return res.sendStatus(204);
   next();
@@ -113,16 +150,10 @@ app.use((req, res, next) => {
 app.post('/auth/signup', async (req, res) => {
   const { email, password } = req.body || {};
   if (!email || !password) return res.status(400).json({ error: 'email and password required' });
-  if (users.has(email))    return res.status(409).json({ error: 'email already registered' });
+  if (dbGetUser.get(email)) return res.status(409).json({ error: 'email already registered' });
 
   const hashedPassword = await bcrypt.hash(password, 10);
-  users.set(email, { email, hashedPassword, credits: INITIAL_CREDITS });
-  // Create session
-  sessions.set(email, {
-    email, credits: INITIAL_CREDITS, socketId: null, task: '',
-    inferenceActive: false, billingStartTime: null, billingInterval: null,
-    modalClient: null, armCalibration: null, cameraConfig: null,
-  });
+  dbCreateUser.run(email, hashedPassword, INITIAL_CREDITS, 'email');
 
   const token = jwt.sign({ userId: email }, JWT_SECRET, { expiresIn: '7d' });
   return res.json({ token, credits: INITIAL_CREDITS });
@@ -132,37 +163,90 @@ app.post('/auth/login', async (req, res) => {
   const { email, password } = req.body || {};
   if (!email || !password) return res.status(400).json({ error: 'email and password required' });
 
-  const user = users.get(email);
-  if (!user) return res.status(401).json({ error: 'invalid credentials' });
+  const user = dbGetUser.get(email);
+  if (!user || !user.hashed_password) return res.status(401).json({ error: 'invalid credentials' });
 
-  const ok = await bcrypt.compare(password, user.hashedPassword);
-  if (!ok)  return res.status(401).json({ error: 'invalid credentials' });
-
-  // Re-create session if missing
-  if (!sessions.has(email)) {
-    sessions.set(email, {
-      email, credits: user.credits, socketId: null, task: '',
-      inferenceActive: false, billingStartTime: null, billingInterval: null,
-      modalClient: null, armCalibration: null, cameraConfig: null,
-    });
-  }
+  const ok = await bcrypt.compare(password, user.hashed_password);
+  if (!ok) return res.status(401).json({ error: 'invalid credentials' });
 
   const token = jwt.sign({ userId: email }, JWT_SECRET, { expiresIn: '7d' });
   return res.json({ token, credits: user.credits });
 });
 
-app.get('/auth/me', (req, res) => {
+function authMiddleware(req, res, next) {
   const authHeader = req.headers.authorization || '';
-  const token = authHeader.replace(/^Bearer\s+/i, '');
-  if (!token) return res.status(401).json({ error: 'missing token' });
+  const tok = authHeader.replace(/^Bearer\s+/i, '');
+  if (!tok) return res.status(401).json({ error: 'missing token' });
   try {
-    const payload = jwt.verify(token, JWT_SECRET);
-    const session = sessions.get(payload.userId);
-    if (!session) return res.status(404).json({ error: 'session not found' });
-    return res.json({ email: session.email, credits: session.credits });
+    const payload = jwt.verify(tok, JWT_SECRET);
+    req.userId = payload.userId;
+    return next();
   } catch {
     return res.status(401).json({ error: 'invalid token' });
   }
+}
+
+app.get('/auth/me', authMiddleware, (req, res) => {
+  const session = sessions.get(req.userId);
+  const credits = session ? session.credits : (dbGetUser.get(req.userId)?.credits ?? 0);
+  return res.json({ email: req.userId, credits });
+});
+
+// ── Google OAuth ──────────────────────────────────────────────────────────────
+
+app.post('/auth/google', async (req, res) => {
+  const { credential } = req.body || {};
+  if (!credential) return res.status(400).json({ error: 'credential required' });
+  if (!googleOAuthClient) {
+    return res.status(503).json({ error: 'Google auth not configured on this server' });
+  }
+  try {
+    const ticket = await googleOAuthClient.verifyIdToken({
+      idToken: credential,
+      audience: GOOGLE_CLIENT_ID,
+    });
+    const gPayload = ticket.getPayload();
+    if (!gPayload?.email) return res.status(400).json({ error: 'No email in Google token' });
+
+    const email = gPayload.email;
+    let user = dbGetUser.get(email);
+    if (!user) {
+      dbCreateUser.run(email, null, INITIAL_CREDITS, 'google');
+      user = dbGetUser.get(email);
+    }
+
+    const token = jwt.sign({ userId: email }, JWT_SECRET, { expiresIn: '7d' });
+    return res.json({ token, credits: user.credits, email });
+  } catch (e) {
+    console.error('[auth/google] error:', e.message);
+    return res.status(401).json({ error: 'Invalid Google token' });
+  }
+});
+
+// ── Calibrations ──────────────────────────────────────────────────────────────
+
+app.get('/calibrations', authMiddleware, (req, res) => {
+  const rows = dbGetCalibrations.all(req.userId);
+  res.json(rows);
+});
+
+app.post('/calibrations', authMiddleware, (req, res) => {
+  const { name, data } = req.body || {};
+  if (!name || !data) return res.status(400).json({ error: 'name and data required' });
+  const result = dbSaveCalibration.run(req.userId, name, JSON.stringify(data));
+  res.json({ id: result.lastInsertRowid, name, created_at: Math.floor(Date.now() / 1000) });
+});
+
+app.get('/calibrations/:id', authMiddleware, (req, res) => {
+  const row = dbGetCalibration.get(req.params.id, req.userId);
+  if (!row) return res.status(404).json({ error: 'not found' });
+  res.json({ ...row, data: JSON.parse(row.data) });
+});
+
+app.delete('/calibrations/:id', authMiddleware, (req, res) => {
+  const result = dbDeleteCalibration.run(req.params.id, req.userId);
+  if (result.changes === 0) return res.status(404).json({ error: 'not found' });
+  res.json({ ok: true });
 });
 
 // ── Socket.io ────────────────────────────────────────────────────────────────
@@ -382,9 +466,11 @@ function startBilling(session, socket) {
   session.billingInterval  = setInterval(() => {
     const deduct = BILLING_RATE_CENTS_PER_SEC;
     session.credits = Math.max(0, session.credits - deduct);
-    // Sync to user store
-    const user = users.get(session.email);
-    if (user) user.credits = session.credits;
+    session.billTick = (session.billTick || 0) + 1;
+    // Persist to DB every 10 seconds to avoid excessive writes
+    if (session.billTick % 10 === 0) {
+      dbUpdateCredits.run(session.credits, session.email);
+    }
 
     socket.emit('credits_update', { credits: parseFloat(session.credits.toFixed(2)) });
 
@@ -405,6 +491,8 @@ function stopBilling(session) {
 
 function stopInference(session, socket) {
   stopBilling(session);
+  // Persist final credits to DB so balance survives server restarts
+  dbUpdateCredits.run(session.credits, session.email);
   if (session.modalClient) {
     const addr = session.modalClient.address;
     session.modalClient.destroy();
@@ -423,13 +511,13 @@ io.on('connection', (socket) => {
   const userId = socket.userId;
   console.log(`[ws] ${userId} connected (${socket.id})`);
 
-  // Get or create session
+  // Get or create session (credits loaded from DB so balance survives server restarts)
   if (!sessions.has(userId)) {
-    const user = users.get(userId);
+    const user = dbGetUser.get(userId);
     sessions.set(userId, {
       email: userId, credits: user ? user.credits : INITIAL_CREDITS, socketId: socket.id,
       task: '', inferenceActive: false, billingStartTime: null, billingInterval: null,
-      modalClient: null, armCalibration: null, cameraConfig: null,
+      billTick: 0, modalClient: null, armCalibration: null, cameraConfig: null,
     });
   }
   const session      = sessions.get(userId);

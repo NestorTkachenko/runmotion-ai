@@ -3,6 +3,7 @@
 import { Suspense, useState, useEffect } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
+import { GoogleLogin } from '@react-oauth/google';
 import { apiPost } from '@/lib/socket';
 
 function SignInContent() {
@@ -32,6 +33,25 @@ function SignInContent() {
       const data = await apiPost<{ token: string; credits: number }>(path, { email, password });
       localStorage.setItem('arm101_token', data.token);
       localStorage.setItem('arm101_email', email);
+      router.push('/dashboard');
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleGoogleSuccess(credentialResponse: { credential?: string }) {
+    if (!credentialResponse.credential) return;
+    setError('');
+    setLoading(true);
+    try {
+      const data = await apiPost<{ token: string; credits: number; email: string }>(
+        '/auth/google',
+        { credential: credentialResponse.credential },
+      );
+      localStorage.setItem('arm101_token', data.token);
+      localStorage.setItem('arm101_email', data.email);
       router.push('/dashboard');
     } catch (err: any) {
       setError(err.message);
@@ -104,6 +124,25 @@ function SignInContent() {
             {loading ? (mode === 'signup' ? 'Creating account...' : 'Signing in...') : (mode === 'signup' ? 'Create account' : 'Sign in')}
           </button>
         </form>
+
+        {/* Google sign-in */}
+        <div className="relative my-5">
+          <div className="absolute inset-0 flex items-center">
+            <span className="w-full border-t border-white/10" />
+          </div>
+          <div className="relative flex justify-center">
+            <span className="bg-white/5 px-3 text-xs text-gray-500">or continue with</span>
+          </div>
+        </div>
+        <div className="flex justify-center">
+          <GoogleLogin
+            onSuccess={handleGoogleSuccess}
+            onError={() => setError('Google sign-in failed. Please try again.')}
+            theme="filled_black"
+            shape="rectangular"
+            width="300"
+          />
+        </div>
 
         {mode === 'signup' && (
           <p className="text-center text-xs text-gray-500 mt-4">
