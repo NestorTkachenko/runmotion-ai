@@ -19,10 +19,15 @@ export interface CameraConfig {
 }
 
 export interface ArmCalibration {
-  /** Raw servo tick at neutral pose recorded with EEPROM corrections zeroed. */
-  homeTicks:    Record<number, number>;
-  minPositions: Record<number, number>;
-  maxPositions: Record<number, number>;
+  /**
+   * Servo tick recorded at the reference/neutral pose (no EEPROM writes needed).
+   * Used as origin: model_degrees=0 → this tick. Scale = 4096/360 ticks per degree.
+   */
+  offsetTicks: Record<number, number>;
+  /** Physical minimum tick for each motor (recorded by moving to limit). */
+  minTicks:    Record<number, number>;
+  /** Physical maximum tick for each motor (recorded by moving to limit). */
+  maxTicks:    Record<number, number>;
 }
 
 const STEP_LABELS: Record<StepNum, string> = {

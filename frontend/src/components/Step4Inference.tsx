@@ -3,52 +3,54 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { Socket } from 'socket.io-client';
 import type { CameraConfig } from '@/app/dashboard/page';
-import { MOTOR_IDS, MOTOR_LABELS, writeAllPositions, readAllPositions, setTorqueAll, probeConnection, resetLimitsToFull, resetCorrectionsAndRead } from '@/lib/feetech';
+import { MOTOR_IDS, MOTOR_LABELS, writeAllPositions, readAllPositions, setTorqueAll, probeConnection, resetLimitsToFull } from '@/lib/feetech';
 import type { ArmCalibration } from '@/app/dashboard/page';
 
 const CONTROL_HZ  = 30;
 const SEND_WIDTH  = 320;
 const SEND_HEIGHT = 180;
 
-// ── Lerobot-compatible unit conversion ────────────────────────────────────────
-// Calibration records the raw servo tick at neutral pose (EEPROM corrections zeroed).
-// That tick is stored as armCalib.homeTicks[motorId] and used as the midpoint for
-// degree conversions, making the coordinate frame identical to the lerobot Python client.
-// No EEPROM corrections are ever written after initial calibration.
+// ── Unit conversion ───────────────────────────────────────────────────────────
+// Calibration stores three tick values per joint (no EEPROM writes needed):
+//   offsetTick — servo tick at the reference/neutral pose (model degree 0 → this tick)
+//   minTick    — servo tick at the physical minimum (hard stop)
+//   maxTick    — servo tick at the physical maximum (hard stop)
+//
+// degrees → ticks:  tick = degrees × (4096/360) + offsetTick,  clamped to [min, max]
+// ticks → degrees:  degrees = (tick − offsetTick) × (360/4096)
+//
+// Gripper (index 5): maps model output 0–100 linearly from minTick to maxTick.
 
-const LEROBOT_MAX_RES = 4096;
-const GRIPPER_IDX     = 5;     // index in MOTOR_IDS array (motor ID 6)
-const WRIST_ROLL_IDX  = 4;     // index in MOTOR_IDS array (motor ID 5)
-const JOINT_MID       = 2048;  // fallback if homeTicks not yet recorded
+const TICKS_PER_DEG = 4096 / 360;
+const GRIPPER_IDX   = 5;   // index into MOTOR_IDS (motor ID 6)
+const FALLBACK_MID  = 2048;
 
-type Calib = { homeTicks?: Record<number, number>; minPositions: Record<number, number>; maxPositions: Record<number, number> } | null;
+type Calib = { offsetTicks?: Record<number, number>; minTicks: Record<number, number>; maxTicks: Record<number, number> } | null;
 
 // ticks → model input units  (degrees for joints 0–4, 0–100 for gripper)
-function ticksToModelUnits(ticks: number, motorIndex: number, calib: Calib, wristMid = JOINT_MID): number {
-  const id = motorIndex + 1;
+function ticksToModelUnits(ticks: number, motorIndex: number, calib: Calib): number {
+  const id  = motorIndex + 1;
+  const min = calib?.minTicks[id] ?? 0;
+  const max = calib?.maxTicks[id] ?? 4095;
   if (motorIndex === GRIPPER_IDX) {
-    const min = calib?.minPositions[id] ?? 0;
-    const max = calib?.maxPositions[id] ?? 4095;
     return Math.min(100, Math.max(0, ((ticks - min) / (max - min || 1)) * 100));
   }
-  const homeTick = calib?.homeTicks?.[id] ?? JOINT_MID;
-  const mid = motorIndex === WRIST_ROLL_IDX ? wristMid : homeTick;
-  return (ticks - mid) * 360 / LEROBOT_MAX_RES;
+  const offset = calib?.offsetTicks?.[id] ?? FALLBACK_MID;
+  return (ticks - offset) / TICKS_PER_DEG;
 }
 
 // model output units → ticks  (degrees for joints 0–4, 0–100 for gripper)
-// Clamped to calibrated [min, max] so inference can never exceed recorded limits.
-function modelUnitsToTicks(val: number, motorIndex: number, calib: Calib, wristMid = JOINT_MID): number {
+// Clamped to [minTick, maxTick] so inference can never exceed recorded limits.
+function modelUnitsToTicks(val: number, motorIndex: number, calib: Calib): number {
   const id     = motorIndex + 1;
-  const calMin = calib?.minPositions[id] ?? 0;
-  const calMax = calib?.maxPositions[id] ?? 4095;
+  const calMin = calib?.minTicks[id] ?? 0;
+  const calMax = calib?.maxTicks[id] ?? 4095;
   if (motorIndex === GRIPPER_IDX) {
     const raw = (val / 100) * (calMax - calMin) + calMin;
     return Math.round(Math.max(calMin, Math.min(calMax, raw)));
   }
-  const homeTick = calib?.homeTicks?.[id] ?? JOINT_MID;
-  const mid = motorIndex === WRIST_ROLL_IDX ? wristMid : homeTick;
-  const raw = val * LEROBOT_MAX_RES / 360 + mid;
+  const offset = calib?.offsetTicks?.[id] ?? FALLBACK_MID;
+  const raw    = val * TICKS_PER_DEG + offset;
   return Math.round(Math.max(calMin, Math.min(calMax, raw)));
 }
 
@@ -127,8 +129,6 @@ export default function Step4Inference({ socket, sdkConnected, cameraConfig, arm
   const waitingChunkRef   = useRef(false);
   const controlTimerRef   = useRef<ReturnType<typeof setTimeout> | null>(null);
   const taskRef           = useRef(task);
-  // Wrist roll offset: tick value at inference start → treated as 0°
-  const wristMidRef       = useRef<number>(JOINT_MID);
 
   const addLog = (msg: string) => setLog((l) => [`[${new Date().toLocaleTimeString()}] ${msg}`, ...l].slice(0, 50));
 
@@ -218,18 +218,10 @@ export default function Step4Inference({ socket, sdkConnected, cameraConfig, arm
       setStatus(s as InferenceStatus);
       if (message) { setStatusMsg(message); addLog(message); }
       if (s === 'ready') {
-        addLog('Server ready — zeroing wrist and starting inference loop.');
-        readAllPositions().then((ticks) => {
-          const wristTick = ticks[WRIST_ROLL_IDX] ?? JOINT_MID;
-          wristMidRef.current = wristTick;
-          addLog(`Wrist roll zeroed at tick ${wristTick}`);
-        }).catch(() => {
-          wristMidRef.current = JOINT_MID;
-        }).finally(() => {
-          setRunning(true);
-          runningRef.current = true;
-          scheduleControlStep();
-        });
+        addLog('Server ready — starting inference loop.');
+        setRunning(true);
+        runningRef.current = true;
+        scheduleControlStep();
       }
     };
 
@@ -241,7 +233,7 @@ export default function Step4Inference({ socket, sdkConnected, cameraConfig, arm
       // Log first action for normalization debugging
       if (actions.length > 0) {
         const a0 = actions[0];
-        const ticks0 = a0.slice(0, 6).map((v, i) => modelUnitsToTicks(v, i, armCalib, wristMidRef.current));
+        const ticks0 = a0.slice(0, 6).map((v, i) => modelUnitsToTicks(v, i, armCalib));
         addLog(`Action[0] raw (deg): [${a0.slice(0,6).map((v)=>v.toFixed(1)).join(', ')}]`);
         addLog(`Action[0] as ticks:  [${ticks0.join(', ')}]`);
       }
@@ -310,7 +302,7 @@ export default function Step4Inference({ socket, sdkConnected, cameraConfig, arm
       let state: number[] = new Array(6).fill(0);
       try {
         const ticks = await readAllPositions();
-        state = ticks.map((t, i) => ticksToModelUnits(t, i, armCalib, wristMidRef.current));
+        state = ticks.map((t, i) => ticksToModelUnits(t, i, armCalib));
         addLog(`Obs state (deg): [${state.map((v)=>v.toFixed(1)).join(', ')}]`);
       } catch {}
 
@@ -356,23 +348,17 @@ export default function Step4Inference({ socket, sdkConnected, cameraConfig, arm
 
         if (sdkConnected) {
           try {
-            const rawTicks = action.slice(0, 6).map((d, i) => {
+            const ticks = action.slice(0, 6).map((d, i) => {
               const id      = i + 1;
-              const homeTick = armCalib?.homeTicks?.[id] ?? JOINT_MID;
-              const mid     = i === WRIST_ROLL_IDX ? wristMidRef.current : homeTick;
-              const calMin  = armCalib?.minPositions[id] ?? 0;
-              const calMax  = armCalib?.maxPositions[id] ?? 4095;
-              return i === GRIPPER_IDX
+              const calMin  = armCalib?.minTicks[id] ?? 0;
+              const calMax  = armCalib?.maxTicks[id] ?? 4095;
+              const offset  = armCalib?.offsetTicks?.[id] ?? FALLBACK_MID;
+              const raw     = i === GRIPPER_IDX
                 ? (d / 100) * (calMax - calMin) + calMin
-                : d * LEROBOT_MAX_RES / 360 + mid;
-            });
-            const ticks = rawTicks.map((r, i) => {
-              const id     = i + 1;
-              const calMin = armCalib?.minPositions[id] ?? 0;
-              const calMax = armCalib?.maxPositions[id] ?? 4095;
-              const clamped = Math.round(Math.max(calMin, Math.min(calMax, r)));
-              if (Math.abs(r - clamped) > 1) {
-                addLog(`⚠ Joint ${i+1} clamped: raw=${r.toFixed(0)} → ${clamped} (limits [${calMin},${calMax}])`);
+                : d * TICKS_PER_DEG + offset;
+              const clamped = Math.round(Math.max(calMin, Math.min(calMax, raw)));
+              if (Math.abs(raw - clamped) > 1) {
+                addLog(`⚠ Joint ${i+1} clamped: raw=${raw.toFixed(0)} → ${clamped} (limits [${calMin},${calMax}])`);
               }
               return clamped;
             });
@@ -453,8 +439,8 @@ export default function Step4Inference({ socket, sdkConnected, cameraConfig, arm
       // 4. Move gripper to calibrated close/open limits.
       //    Use armCalib min/max if available, otherwise ±500 from neutral mid.
       const GRIPPER_ID      = 6;
-      const calibMin        = armCalib?.minPositions[GRIPPER_ID];
-      const calibMax        = armCalib?.maxPositions[GRIPPER_ID];
+      const calibMin        = armCalib?.minTicks[GRIPPER_ID];
+      const calibMax        = armCalib?.maxTicks[GRIPPER_ID];
       const gripperCurrent  = currentTicks[5];
       const closeTarget     = calibMin  ?? Math.max(  0, gripperCurrent - 500);
       const openTarget      = calibMax  ?? Math.min(4095, gripperCurrent + 500);
@@ -493,17 +479,12 @@ export default function Step4Inference({ socket, sdkConnected, cameraConfig, arm
     if (!liveConnected) { addLog('Robot not connected — check USB cable.'); return; }
     if (!armCalib)       { addLog('Arm not calibrated — complete Step 2 first.'); return; }
 
-    // Zero EEPROM corrections synchronously before starting inference.
-    // Calibration records raw ticks with zeroed EEPROM, so we must ensure
-    // the same state here. This also undoes any offsets written by lerobot Python.
-    addLog('Zeroing EEPROM corrections…');
+    addLog('Enabling torque…');
     try {
-      await resetLimitsToFull();
-      await resetCorrectionsAndRead();
       await setTorqueAll(true);
-      addLog('EEPROM zeroed, torque enabled ✓');
+      addLog('Torque enabled ✓');
     } catch (e: any) {
-      addLog(`EEPROM prep warning: ${e.message}`);
+      addLog(`Torque warning: ${e.message}`);
     }
 
     setStatus('connecting');
@@ -600,7 +581,7 @@ export default function Step4Inference({ socket, sdkConnected, cameraConfig, arm
       ) : (
         <div className="bg-green-50 border border-green-200 rounded-xl p-3 mb-4 flex items-center gap-2 text-sm text-green-800">
           <span>✓</span>
-          <span>Calibration loaded — {Object.keys(armCalib.minPositions).length} joints, limits saved.</span>
+          <span>Calibration loaded — {Object.keys(armCalib.minTicks).length} joints, limits saved.</span>
         </div>
       )}
 
@@ -622,10 +603,9 @@ export default function Step4Inference({ socket, sdkConnected, cameraConfig, arm
             onClick={async () => {
               try {
                 const ticks = await readAllPositions();
-                const degs  = ticks.map((t, i) => ticksToModelUnits(t, i, armCalib, wristMidRef.current));
+                const degs  = ticks.map((t, i) => ticksToModelUnits(t, i, armCalib));
                 addLog(`── Read positions ──`);
                 addLog(`Ticks:       [${ticks.join(', ')}]`);
-                addLog(`Wrist mid:   ${wristMidRef.current} (zeroed at inference start)`);
                 addLog(`Model units: [${degs.map((v) => v.toFixed(1)).join(', ')}]  (degs | gripper=0-100)`);
               } catch (e: any) {
                 addLog(`Read error: ${e.message}`);
