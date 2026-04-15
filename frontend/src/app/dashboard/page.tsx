@@ -36,12 +36,14 @@ const STEP_LABELS: Record<StepNum, string> = {
 
 export default function DashboardPage() {
   const router = useRouter();
+  const MIN_TOP_UP_USD = 5;
 
   // Auth & credits
   const [email, setEmail]       = useState('');
   const [credits, setCredits]   = useState<number>(0);
   const [addingCredits, setAddingCredits] = useState(false);
   const [billingError, setBillingError]   = useState('');
+  const [addCreditsUsd, setAddCreditsUsd] = useState<string>('20');
 
   // Step navigation
   const [activeStep, setActiveStep]   = useState<StepNum>(1);
@@ -101,6 +103,12 @@ export default function DashboardPage() {
       return;
     }
 
+    const requestedUsd = Number(addCreditsUsd);
+    if (!Number.isFinite(requestedUsd) || requestedUsd < MIN_TOP_UP_USD) {
+      setBillingError(`Minimum top-up is $${MIN_TOP_UP_USD}.`);
+      return;
+    }
+
     setAddingCredits(true);
     setBillingError('');
     try {
@@ -110,6 +118,7 @@ export default function DashboardPage() {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${token}`,
         },
+        body: JSON.stringify({ amountUsd: requestedUsd }),
       });
       let data = null;
       try {
@@ -142,6 +151,20 @@ export default function DashboardPage() {
           <div className="flex items-center gap-2 bg-gray-100 rounded-full px-3.5 py-1 text-sm">
             <span className="text-gray-500">Credits</span>
             <span className="font-semibold text-gray-900">${(credits / 100).toFixed(2)}</span>
+            <div className="flex items-center gap-1 ml-1">
+              <span className="text-gray-500 text-xs">Add</span>
+              <span className="text-gray-500 text-xs">$</span>
+              <input
+                type="number"
+                min={MIN_TOP_UP_USD}
+                step="1"
+                value={addCreditsUsd}
+                onChange={(e) => setAddCreditsUsd(e.target.value)}
+                disabled={addingCredits}
+                className="w-16 rounded-md border border-gray-300 px-1.5 py-0.5 text-xs text-gray-900 bg-white focus:outline-none focus:ring-1 focus:ring-violet-400"
+                aria-label="Top-up amount in USD"
+              />
+            </div>
             <button
               onClick={handleAddCredits}
               disabled={addingCredits}

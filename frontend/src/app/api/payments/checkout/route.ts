@@ -4,6 +4,7 @@ import Stripe from 'stripe';
 
 export async function POST(req: Request) {
   try {
+    const MIN_TOP_UP_USD = 5;
     const auth = req.headers.get('authorization') || '';
     const token = auth.startsWith('Bearer ') ? auth.slice(7) : '';
     if (!token) {
@@ -48,10 +49,23 @@ export async function POST(req: Request) {
       maxNetworkRetries: 2,
       timeout: 20000,
     });
-    const creditPackUsd = Number(process.env.STRIPE_CREDIT_PACK_USD || '20');
-    const unitAmount = Number.isFinite(creditPackUsd) && creditPackUsd > 0
-      ? Math.round(creditPackUsd * 100)
-      : 2000;
+
+    let requestedAmountUsd: number | null = null;
+    try {
+      const rawBody = await req.text();
+      if (rawBody) {
+        const parsed = JSON.parse(rawBody) as { amountUsd?: number };
+        const amt = Number(parsed.amountUsd);
+        if (Number.isFinite(amt)) requestedAmountUsd = amt;
+      }
+    } catch {
+      // If body is invalid/empty, we'll fall back to env default.
+    }
+
+    const defaultCreditPackUsd = Number(process.env.STRIPE_CREDIT_PACK_USD || '20');
+    const baseAmountUsd = requestedAmountUsd ?? (Number.isFinite(defaultCreditPackUsd) ? defaultCreditPackUsd : 20);
+    const normalizedAmountUsd = Math.max(MIN_TOP_UP_USD, baseAmountUsd);
+    const unitAmount = Math.round(normalizedAmountUsd * 100);
 
     const session = await stripe.checkout.sessions.create({
       mode: 'payment',
@@ -75,6 +89,7 @@ export async function POST(req: Request) {
         email: email || '',
         source: 'dashboard_add_credits',
         amount_cents: String(unitAmount),
+        amount_usd: normalizedAmountUsd.toFixed(2),
       },
     });
 
