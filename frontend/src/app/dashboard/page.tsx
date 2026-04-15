@@ -111,8 +111,14 @@ export default function DashboardPage() {
           Authorization: `Bearer ${token}`,
         },
       });
-      const data = await res.json();
-      if (!res.ok || !data.url) {
+      let data = null;
+      try {
+        const text = await res.text();
+        data = text ? JSON.parse(text) : null;
+      } catch (err) {
+        // Ignore JSON parse errors, data remains null
+      }
+      if (!res.ok || !data?.url) {
         throw new Error(data?.error || 'Unable to start checkout.');
       }
       window.location.href = data.url as string;
