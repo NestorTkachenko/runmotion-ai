@@ -29,6 +29,7 @@ const { encode: msgpackEncode, decode: msgpackDecode } = require('@msgpack/msgpa
 const { v4: uuidv4 } = require('uuid');
 const { DatabaseSync } = require('node:sqlite');
 const { OAuth2Client } = require('google-auth-library');
+const Stripe = require('stripe');
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
@@ -51,6 +52,14 @@ const MODAL_LAUNCH_COOLDOWN_MS = parseInt(process.env.MODAL_LAUNCH_COOLDOWN_MS |
 const BILLING_RATE_CENTS_PER_SEC = 0.15 / 60 * 100;
 
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '386895169996-dik1r8cmiv7gonhhs6s56rsu5lishj3q.apps.googleusercontent.com';
+const STRIPE_SECRET_KEY = (process.env.STRIPE_SECRET_KEY || '').trim();
+const STRIPE_WEBHOOK_SECRETS = (
+  process.env.STRIPE_WEBHOOK_SECRETS || process.env.STRIPE_WEBHOOK_SECRET || ''
+)
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
+const stripe = STRIPE_SECRET_KEY ? new Stripe(STRIPE_SECRET_KEY) : null;
 
 // Parse Modal addresses from env: "addr1,addr2"
 const MODAL_ADDRESSES = (process.env.MODAL_ADDRESSES || '')
@@ -82,6 +91,11 @@ db.exec(`
     data       TEXT NOT NULL,
     created_at INTEGER NOT NULL DEFAULT (unixepoch())
   );
+  CREATE TABLE IF NOT EXISTS stripe_events (
+    event_id   TEXT PRIMARY KEY,
+    event_type TEXT NOT NULL,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch())
+  );
 `);
 
 const dbGetUser           = db.prepare('SELECT * FROM users WHERE email = ?');
@@ -91,6 +105,7 @@ const dbGetCalibrations   = db.prepare('SELECT id, name, created_at FROM calibra
 const dbGetCalibration    = db.prepare('SELECT * FROM calibrations WHERE id = ? AND email = ?');
 const dbSaveCalibration   = db.prepare('INSERT INTO calibrations (email, name, data) VALUES (?, ?, ?)');
 const dbDeleteCalibration = db.prepare('DELETE FROM calibrations WHERE id = ? AND email = ?');
+const dbInsertStripeEvent = db.prepare('INSERT OR IGNORE INTO stripe_events (event_id, event_type) VALUES (?, ?)');
 
 const googleOAuthClient = GOOGLE_CLIENT_ID ? new OAuth2Client(GOOGLE_CLIENT_ID) : null;
 
@@ -133,6 +148,8 @@ for (const addr of MODAL_ADDRESSES) addModalAddress(addr, 'env');
 const app    = express();
 const server = http.createServer(app);
 
+// Stripe signature verification requires the raw request body.
+app.use('/billing/stripe/webhook', express.raw({ type: 'application/json' }));
 app.use(express.json({ limit: '1mb' }));
 app.use((req, res, next) => {
   const origin = req.headers.origin;
@@ -190,6 +207,96 @@ app.get('/auth/me', authMiddleware, (req, res) => {
   const session = sessions.get(req.userId);
   const credits = session ? session.credits : (dbGetUser.get(req.userId)?.credits ?? 0);
   return res.json({ email: req.userId, credits });
+});
+
+// ── Stripe billing webhook ──────────────────────────────────────────────────
+
+function parseStripeEvent(rawBody, signature) {
+  if (!stripe || STRIPE_WEBHOOK_SECRETS.length === 0) return null;
+  for (const secret of STRIPE_WEBHOOK_SECRETS) {
+    try {
+      return stripe.webhooks.constructEvent(rawBody, signature, secret);
+    } catch {
+      // try next secret
+    }
+  }
+  return null;
+}
+
+function emitCreditsUpdateIfConnected(email, credits) {
+  const active = sessions.get(email);
+  if (!active) return;
+  active.credits = credits;
+  if (active.socketId) {
+    io.to(active.socketId).emit('credits_update', { credits: parseFloat(credits.toFixed(2)) });
+  }
+}
+
+function creditUserInDb(email, amountCents) {
+  const user = dbGetUser.get(email);
+  if (!user) throw new Error(`Unknown user for Stripe credit top-up: ${email}`);
+  const newCredits = Number(user.credits) + Number(amountCents);
+  dbUpdateCredits.run(newCredits, email);
+  return newCredits;
+}
+
+app.post('/billing/stripe/webhook', (req, res) => {
+  if (!stripe || STRIPE_WEBHOOK_SECRETS.length === 0) {
+    return res.status(503).send('Stripe webhook not configured');
+  }
+
+  const signature = req.headers['stripe-signature'];
+  if (!signature || typeof signature !== 'string') {
+    return res.status(400).send('Missing stripe-signature header');
+  }
+
+  const event = parseStripeEvent(req.body, signature);
+  if (!event) {
+    return res.status(400).send('Invalid Stripe webhook signature');
+  }
+
+  const isCheckoutPaidEvent =
+    event.type === 'checkout.session.completed' ||
+    event.type === 'checkout.session.async_payment_succeeded';
+
+  if (!isCheckoutPaidEvent) {
+    return res.json({ received: true, ignored: true });
+  }
+
+  const checkout = event.data.object;
+  const amountCents = Number(checkout.amount_total ?? checkout.metadata?.amount_cents ?? 0);
+  const email = checkout.customer_details?.email || checkout.customer_email || checkout.metadata?.email;
+
+  if (!email || !Number.isFinite(amountCents) || amountCents <= 0) {
+    console.warn('[stripe] ignored webhook with missing email/amount', {
+      eventId: event.id,
+      type: event.type,
+      email,
+      amountCents,
+    });
+    return res.json({ received: true, ignored: true });
+  }
+
+  let newCredits;
+  try {
+    db.exec('BEGIN IMMEDIATE');
+    const insertResult = dbInsertStripeEvent.run(event.id, event.type);
+    if (insertResult.changes === 0) {
+      db.exec('COMMIT');
+      return res.json({ received: true, duplicate: true });
+    }
+
+    newCredits = creditUserInDb(email, amountCents);
+    db.exec('COMMIT');
+  } catch (e) {
+    try { db.exec('ROLLBACK'); } catch {}
+    console.error('[stripe] failed to apply credits:', e.message);
+    return res.status(500).send('Failed to apply credits');
+  }
+
+  emitCreditsUpdateIfConnected(email, newCredits);
+  console.log(`[stripe] credited ${email} +${amountCents} cents (event=${event.id})`);
+  return res.json({ received: true, credited: true });
 });
 
 // ── Google OAuth ──────────────────────────────────────────────────────────────

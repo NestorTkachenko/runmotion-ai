@@ -16,6 +16,7 @@
     "google-auth-library": "^9.10.0",
     "jsonwebtoken": "^9.0.2",
     "socket.io": "^4.7.5",
+    "stripe": "^16.12.0",
     "uuid": "^9.0.1"
   },
   "devDependencies": {

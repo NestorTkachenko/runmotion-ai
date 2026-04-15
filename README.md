@@ -218,9 +218,11 @@ pm2 restart arm101-backend
 ## 5 — Architecture notes
 
 ### Billing
-- Credits are stored in memory (restart resets them).  
-- For production: replace the in-memory `users` Map in `backend/server.js`
-  with a Postgres/SQLite table.  Stripe integration for `POST /billing/add-credits`.
+- Credits are stored in SQLite (`backend/data/db.sqlite`) and survive restarts.
+- Stripe top-ups are fulfilled through backend webhook:
+  `POST /billing/stripe/webhook` (`checkout.session.completed` +
+  `checkout.session.async_payment_succeeded`).
+- Webhook events are idempotent via `stripe_events` table to prevent double credits.
 
 ### Auth
 - Simple JWT + bcrypt.  For production add email verification, rate limiting,
