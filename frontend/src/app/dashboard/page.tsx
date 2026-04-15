@@ -44,6 +44,7 @@ export default function DashboardPage() {
   const [addingCredits, setAddingCredits] = useState(false);
   const [billingError, setBillingError]   = useState('');
   const [addCreditsUsd, setAddCreditsUsd] = useState<string>('20');
+  const [showTopUpModal, setShowTopUpModal] = useState(false);
 
   // Step navigation
   const [activeStep, setActiveStep]   = useState<StepNum>(1);
@@ -96,14 +97,14 @@ export default function DashboardPage() {
     router.replace('/signin');
   }
 
-  async function handleAddCredits() {
+  async function handleAddCredits(amountUsd: number) {
     const token = typeof window !== 'undefined' ? localStorage.getItem('runmotion_token') : null;
     if (!token) {
       router.replace('/signin');
       return;
     }
 
-    const requestedUsd = Number(addCreditsUsd);
+    const requestedUsd = Number(amountUsd);
     if (!Number.isFinite(requestedUsd) || requestedUsd < MIN_TOP_UP_USD) {
       setBillingError(`Minimum top-up is $${MIN_TOP_UP_USD}.`);
       return;
@@ -131,11 +132,23 @@ export default function DashboardPage() {
         const httpHint = ` (HTTP ${res.status})`;
         throw new Error(data?.error || `Unable to start checkout.${httpHint}`);
       }
+      setShowTopUpModal(false);
       window.location.href = data.url as string;
     } catch (e: any) {
       setBillingError(e.message || 'Unable to start checkout.');
       setAddingCredits(false);
     }
+  }
+
+  function openTopUpModal() {
+    setBillingError('');
+    setShowTopUpModal(true);
+  }
+
+  function closeTopUpModal() {
+    if (addingCredits) return;
+    setBillingError('');
+    setShowTopUpModal(false);
   }
 
   return (
@@ -151,33 +164,14 @@ export default function DashboardPage() {
           <div className="flex items-center gap-2 bg-gray-100 rounded-full px-3.5 py-1 text-sm">
             <span className="text-gray-500">Credits</span>
             <span className="font-semibold text-gray-900">${(credits / 100).toFixed(2)}</span>
-            <div className="flex items-center gap-1 ml-1">
-              <span className="text-gray-500 text-xs">Add</span>
-              <span className="text-gray-500 text-xs">$</span>
-              <input
-                type="number"
-                min={MIN_TOP_UP_USD}
-                step="1"
-                value={addCreditsUsd}
-                onChange={(e) => setAddCreditsUsd(e.target.value)}
-                disabled={addingCredits}
-                className="w-16 rounded-md border border-gray-300 px-1.5 py-0.5 text-xs text-gray-900 bg-white focus:outline-none focus:ring-1 focus:ring-violet-400"
-                aria-label="Top-up amount in USD"
-              />
-            </div>
             <button
-              onClick={handleAddCredits}
+              onClick={openTopUpModal}
               disabled={addingCredits}
               className="text-violet-600 font-medium hover:text-violet-800 transition-colors text-xs ml-1 disabled:opacity-50"
             >
-              {addingCredits ? 'Opening checkout…' : 'Add credits →'}
+              Add credits →
             </button>
           </div>
-          {billingError && (
-            <div className="text-xs text-red-500 max-w-[220px] truncate" title={billingError}>
-              {billingError}
-            </div>
-          )}
           {/* User */}
           <div className="flex items-center gap-2">
             <div className="w-7 h-7 rounded-full bg-gradient-to-br from-violet-400 to-cyan-400 flex items-center justify-center text-white text-xs font-bold">
@@ -269,6 +263,76 @@ export default function DashboardPage() {
           )}
         </main>
       </div>
+
+      {showTopUpModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <button
+            type="button"
+            aria-label="Close top-up dialog"
+            onClick={closeTopUpModal}
+            className="absolute inset-0 bg-black/40"
+          />
+          <div className="relative w-full max-w-md rounded-2xl border border-gray-200 bg-white shadow-2xl p-6 animate-fade-in">
+            <div className="mb-4">
+              <h3 className="text-lg font-semibold text-gray-900">Add Credits</h3>
+              <p className="text-sm text-gray-500 mt-1">Choose how much to top up. Minimum is $5.</p>
+            </div>
+
+            <div className="grid grid-cols-5 gap-2 mb-4">
+              {[5, 10, 20, 50, 100].map((amt) => (
+                <button
+                  key={amt}
+                  type="button"
+                  onClick={() => setAddCreditsUsd(String(amt))}
+                  className={`rounded-lg border px-2 py-1.5 text-xs font-medium transition-colors ${
+                    Number(addCreditsUsd) === amt
+                      ? 'border-violet-500 bg-violet-50 text-violet-700'
+                      : 'border-gray-200 text-gray-700 hover:bg-gray-50'
+                  }`}
+                >
+                  ${amt}
+                </button>
+              ))}
+            </div>
+
+            <label className="block text-xs font-medium text-gray-500 uppercase tracking-wide mb-2">
+              Custom amount (USD)
+            </label>
+            <input
+              type="number"
+              min={MIN_TOP_UP_USD}
+              step="1"
+              value={addCreditsUsd}
+              onChange={(e) => setAddCreditsUsd(e.target.value)}
+              disabled={addingCredits}
+              className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm text-gray-900 focus:outline-none focus:ring-1 focus:ring-violet-400"
+            />
+
+            {billingError && (
+              <div className="text-xs text-red-500 mt-2">{billingError}</div>
+            )}
+
+            <div className="mt-5 flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={closeTopUpModal}
+                disabled={addingCredits}
+                className="px-3 py-2 rounded-lg border border-gray-200 text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => handleAddCredits(Number(addCreditsUsd))}
+                disabled={addingCredits}
+                className="px-4 py-2 rounded-lg bg-violet-600 text-white text-sm font-semibold hover:bg-violet-700 disabled:opacity-50"
+              >
+                {addingCredits ? 'Opening checkout…' : 'Continue to checkout'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
