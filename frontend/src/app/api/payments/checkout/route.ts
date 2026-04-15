@@ -10,7 +10,8 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    if (!process.env.STRIPE_SECRET_KEY) {
+    const stripeKey = process.env.STRIPE_SECRET_KEY?.trim().replace(/^['\"]|['\"]$/g, '');
+    if (!stripeKey) {
       return NextResponse.json({ error: 'Missing STRIPE_SECRET_KEY' }, { status: 500 });
     }
 
@@ -43,7 +44,10 @@ export async function POST(req: Request) {
       hdrs.get('origin') ||
       'https://www.runmotion.ai';
 
-    const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
+    const stripe = new Stripe(stripeKey, {
+      maxNetworkRetries: 2,
+      timeout: 20000,
+    });
     const creditPackUsd = Number(process.env.STRIPE_CREDIT_PACK_USD || '20');
     const unitAmount = Number.isFinite(creditPackUsd) && creditPackUsd > 0
       ? Math.round(creditPackUsd * 100)
@@ -80,6 +84,26 @@ export async function POST(req: Request) {
 
     return NextResponse.json({ url: session.url });
   } catch (e: any) {
-    return NextResponse.json({ error: e?.message || 'Unable to start checkout.' }, { status: 500 });
+    const stripeType = e?.type as string | undefined;
+    const stripeCode = e?.code as string | undefined;
+
+    if (stripeType === 'StripeAuthenticationError') {
+      return NextResponse.json(
+        { error: 'Stripe authentication failed. Verify STRIPE_SECRET_KEY in Vercel production env.' },
+        { status: 500 },
+      );
+    }
+
+    if (stripeType === 'StripeConnectionError') {
+      return NextResponse.json(
+        { error: `Stripe connection error: ${e?.message || 'network issue contacting Stripe'}` },
+        { status: 502 },
+      );
+    }
+
+    return NextResponse.json(
+      { error: e?.message || `Unable to start checkout${stripeCode ? ` (${stripeCode})` : ''}.` },
+      { status: 500 },
+    );
   }
 }
