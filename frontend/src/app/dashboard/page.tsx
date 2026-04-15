@@ -40,6 +40,8 @@ export default function DashboardPage() {
   // Auth & credits
   const [email, setEmail]       = useState('');
   const [credits, setCredits]   = useState<number>(0);
+  const [addingCredits, setAddingCredits] = useState(false);
+  const [billingError, setBillingError]   = useState('');
 
   // Step navigation
   const [activeStep, setActiveStep]   = useState<StepNum>(1);
@@ -92,6 +94,34 @@ export default function DashboardPage() {
     router.replace('/signin');
   }
 
+  async function handleAddCredits() {
+    const token = typeof window !== 'undefined' ? localStorage.getItem('runmotion_token') : null;
+    if (!token) {
+      router.replace('/signin');
+      return;
+    }
+
+    setAddingCredits(true);
+    setBillingError('');
+    try {
+      const res = await fetch('/api/payments/checkout', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+      });
+      const data = await res.json();
+      if (!res.ok || !data.url) {
+        throw new Error(data?.error || 'Unable to start checkout.');
+      }
+      window.location.href = data.url as string;
+    } catch (e: any) {
+      setBillingError(e.message || 'Unable to start checkout.');
+      setAddingCredits(false);
+    }
+  }
+
   return (
     <div className="min-h-screen dashboard-body flex flex-col">
       {/* ── Header ─────────────────────────────────────────────────────────── */}
@@ -105,10 +135,19 @@ export default function DashboardPage() {
           <div className="flex items-center gap-2 bg-gray-100 rounded-full px-3.5 py-1 text-sm">
             <span className="text-gray-500">Credits</span>
             <span className="font-semibold text-gray-900">${(credits / 100).toFixed(2)}</span>
-            <button className="text-violet-600 font-medium hover:text-violet-800 transition-colors text-xs ml-1">
-              Add →
+            <button
+              onClick={handleAddCredits}
+              disabled={addingCredits}
+              className="text-violet-600 font-medium hover:text-violet-800 transition-colors text-xs ml-1 disabled:opacity-50"
+            >
+              {addingCredits ? 'Opening checkout…' : 'Add credits →'}
             </button>
           </div>
+          {billingError && (
+            <div className="text-xs text-red-500 max-w-[220px] truncate" title={billingError}>
+              {billingError}
+            </div>
+          )}
           {/* User */}
           <div className="flex items-center gap-2">
             <div className="w-7 h-7 rounded-full bg-gradient-to-br from-violet-400 to-cyan-400 flex items-center justify-center text-white text-xs font-bold">

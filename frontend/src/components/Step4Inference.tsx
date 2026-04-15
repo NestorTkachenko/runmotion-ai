@@ -405,23 +405,18 @@ export default function Step4Inference({ socket, sdkConnected, cameraConfig, arm
     setTestBusy(true);
     setTestLog('');
     try {
-      // 1. Reset EEPROM limits so previously-saved narrow calibration limits
-      //    can't silently block position commands.
-      addLog('Test: resetting EEPROM position limits to full range…');
+      addLog('Test: preparing robot…');
       await resetLimitsToFull();
-      addLog('Test: EEPROM limits reset ✓');
+      addLog('Test: ready ✓');
 
-      // 2. Enable torque
       await setTorqueAll(true);
-      addLog('Test: torque enabled ✓');
+      addLog('Test: motors enabled ✓');
 
-      // 3. Read current positions
       let currentTicks: number[] = new Array(6).fill(2048);
       try {
         currentTicks = await readAllPositions();
-        addLog(`Test: current positions = [${currentTicks.join(', ')}]`);
       } catch (e: any) {
-        addLog(`Test: readAllPositions failed: ${e.message}`);
+        addLog(`Test warning: ${e.message}`);
       }
 
       // 4. Move gripper to calibrated close/open limits.
@@ -450,7 +445,7 @@ export default function Step4Inference({ socket, sdkConnected, cameraConfig, arm
       await write(openTarget,   'Opening gripper…');
       await new Promise((r) => setTimeout(r, 1200));
       await write(neutralTarget, 'Returning to neutral');
-      setTestLog('✓ Done — if the gripper moved, feetech.js is working.');
+      setTestLog('✓ Done — gripper test complete.');
       addLog('Test: complete ✓');
     } catch (e: any) {
       setTestLog(`Error: ${e.message}`);
@@ -467,14 +462,14 @@ export default function Step4Inference({ socket, sdkConnected, cameraConfig, arm
     if (!liveConnected) { addLog('Robot not connected — check USB cable.'); return; }
     if (!armCalib)       { addLog('Arm not calibrated — complete Step 2 first.'); return; }
 
-    addLog('Resetting EEPROM position limits to full range…');
+    addLog('Preparing robot…');
     try { await resetLimitsToFull(); } catch {}
-    addLog('Enabling torque…');
+    addLog('Final safety checks…');
     try {
       await setTorqueAll(true);
-      addLog('Torque enabled ✓');
+      addLog('Ready to start ✓');
     } catch (e: any) {
-      addLog(`Torque warning: ${e.message}`);
+      addLog(`Setup warning: ${e.message}`);
     }
 
     setStatus('connecting');
@@ -537,8 +532,7 @@ export default function Step4Inference({ socket, sdkConnected, cameraConfig, arm
         <div className="text-xs font-semibold uppercase tracking-widest text-violet-600 mb-2">Step 4</div>
         <h1 className="text-2xl font-bold text-gray-900 mb-2">Run AI Policy</h1>
         <p className="text-gray-500 text-sm leading-relaxed">
-          Issue a task description and let the AI control the arm. Camera frames and joint states are
-          sent to the inference server every 20 steps (~660ms). Actions are executed at 30 Hz.
+          Describe what you want in plain English, then let the AI control the arm.
         </p>
       </div>
 
@@ -595,7 +589,7 @@ export default function Step4Inference({ socket, sdkConnected, cameraConfig, arm
       <div className="bg-white border border-gray-200 rounded-xl shadow-sm p-4 mb-4">
         <div className="flex items-center justify-between mb-2">
           <span className="text-sm font-medium text-gray-700">Motor test</span>
-          <span className="text-xs text-gray-400">Verify feetech.js can drive the arm</span>
+          <span className="text-xs text-gray-400">Quickly verify the gripper responds</span>
         </div>
         <div className="flex items-center gap-3">
           <button
@@ -604,22 +598,6 @@ export default function Step4Inference({ socket, sdkConnected, cameraConfig, arm
             className="px-4 py-2 rounded-lg bg-gray-800 text-white text-xs font-medium hover:bg-gray-900 transition-colors disabled:opacity-50"
           >
             {testBusy ? 'Testing…' : 'Test gripper open/close'}
-          </button>
-          <button
-            onClick={async () => {
-              try {
-                const ticks = await readAllPositions();
-                const degs  = ticks.map((t, i) => ticksToModelUnits(t, i, armCalib));
-                addLog(`── Read positions ──`);
-                addLog(`Ticks:       [${ticks.join(', ')}]`);
-                addLog(`Model units: [${degs.map((v, i) => v.toFixed(1) + (i === GRIPPER_IDX ? '%' : '')).join(', ')}]  (joints -100..100, grip 0-100%)`);
-              } catch (e: any) {
-                addLog(`Read error: ${e.message}`);
-              }
-            }}
-            className="px-4 py-2 rounded-lg border border-gray-300 text-gray-700 text-xs font-medium hover:bg-gray-50 transition-colors"
-          >
-            Read positions
           </button>
           {testLog && (
             <span className={`text-xs ${testLog.startsWith('Error') ? 'text-red-500' : testLog.startsWith('✓') ? 'text-green-600' : 'text-gray-500'}`}>

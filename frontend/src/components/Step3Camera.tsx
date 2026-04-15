@@ -1,7 +1,10 @@
 'use client';
 
+import Image from 'next/image';
 import { useState, useEffect, useRef } from 'react';
 import type { CameraConfig } from '@/app/dashboard/page';
+import topViewRef from './top_view.png';
+import gripperViewRef from './gripper_view.png';
 
 type Rotation = 0 | 90 | 180 | 270;
 const ROTATIONS: Rotation[] = [0, 90, 180, 270];
@@ -123,20 +126,13 @@ export default function Step3Camera({ onComplete }: Props) {
               Top camera — bird&apos;s-eye view of workspace
             </div>
             <div className="relative aspect-video rounded-lg overflow-hidden bg-blue-100 border border-blue-200">
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
-                src="/camera-ref/top.jpg"
-                alt="Top camera reference: overhead view of the workspace showing the full table area"
-                className="w-full h-full object-cover"
-                onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
+              <Image
+                src={topViewRef}
+                alt="Top camera reference: overhead view of the workspace"
+                fill
+                className="object-cover"
+                sizes="(max-width: 768px) 100vw, 50vw"
               />
-              <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                <div className="text-center text-blue-500 text-xs px-2">
-                  <div className="text-2xl mb-1">🔭</div>
-                  <div className="font-medium">Overhead view</div>
-                  <div className="text-blue-400">full workspace visible</div>
-                </div>
-              </div>
             </div>
             <p className="text-xs text-blue-600 mt-1.5 leading-relaxed">
               Mounted above, looking straight down. Should show the full work surface — objects, cup, and target area all visible.
@@ -148,20 +144,13 @@ export default function Step3Camera({ onComplete }: Props) {
               Wrist camera — close-up gripper view
             </div>
             <div className="relative aspect-video rounded-lg overflow-hidden bg-orange-50 border border-orange-200">
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
-                src="/camera-ref/wrist.jpg"
-                alt="Wrist camera reference: close-up view from arm gripper looking at object being grasped"
-                className="w-full h-full object-cover"
-                onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
+              <Image
+                src={gripperViewRef}
+                alt="Wrist camera reference: close-up gripper view"
+                fill
+                className="object-cover"
+                sizes="(max-width: 768px) 100vw, 50vw"
               />
-              <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                <div className="text-center text-orange-500 text-xs px-2">
-                  <div className="text-2xl mb-1">🤏</div>
-                  <div className="font-medium">Gripper POV</div>
-                  <div className="text-orange-400">object close-up</div>
-                </div>
-              </div>
             </div>
             <p className="text-xs text-orange-700 mt-1.5 leading-relaxed">
               Mounted on the wrist, looking forward/down. Should show the gripper fingers and the object being grasped up close.
