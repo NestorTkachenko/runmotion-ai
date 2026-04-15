@@ -13,10 +13,6 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: 'Missing STRIPE_SECRET_KEY' }, { status: 500 });
   }
 
-  if (!process.env.STRIPE_PRICE_ID_CREDITS) {
-    return NextResponse.json({ error: 'Missing STRIPE_PRICE_ID_CREDITS' }, { status: 500 });
-  }
-
   const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'https://api.runmotion.ai';
   const meRes = await fetch(`${backendUrl}/auth/me`, {
     headers: { Authorization: `Bearer ${token}` },
@@ -37,12 +33,23 @@ export async function POST(req: Request) {
     'https://www.runmotion.ai';
 
   const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
+  const creditPackUsd = Number(process.env.STRIPE_CREDIT_PACK_USD || '20');
+  const unitAmount = Number.isFinite(creditPackUsd) && creditPackUsd > 0
+    ? Math.round(creditPackUsd * 100)
+    : 2000;
 
   const session = await stripe.checkout.sessions.create({
     mode: 'payment',
     line_items: [
       {
-        price: process.env.STRIPE_PRICE_ID_CREDITS,
+        price_data: {
+          currency: 'usd',
+          product_data: {
+            name: 'runmotion.ai credits',
+            description: `$${(unitAmount / 100).toFixed(2)} credit top-up`,
+          },
+          unit_amount: unitAmount,
+        },
         quantity: 1,
       },
     ],
@@ -52,6 +59,7 @@ export async function POST(req: Request) {
     metadata: {
       email: email || '',
       source: 'dashboard_add_credits',
+      amount_cents: String(unitAmount),
     },
   });
 
