@@ -119,7 +119,8 @@ export default function DashboardPage() {
         // Ignore JSON parse errors, data remains null
       }
       if (!res.ok || !data?.url) {
-        throw new Error(data?.error || 'Unable to start checkout.');
+        const httpHint = ` (HTTP ${res.status})`;
+        throw new Error(data?.error || `Unable to start checkout.${httpHint}`);
       }
       window.location.href = data.url as string;
     } catch (e: any) {
