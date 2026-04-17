@@ -100,7 +100,7 @@ export default function Step4Inference({ socket, sdkConnected, cameraConfig, arm
   const [statusMsg,  setStatusMsg]  = useState('');
   const [task,       setTask]       = useState('Pick up the black block and put it in the white cup');
   const [running,    setRunning]    = useState(false);
-  const [log,        setLog]        = useState<string[]>([]);
+  const [showBestPractices, setShowBestPractices] = useState(false);
 
   // Camera streams
   const topVideoRef   = useRef<HTMLVideoElement>(null);
@@ -119,11 +119,6 @@ export default function Step4Inference({ socket, sdkConnected, cameraConfig, arm
   const controlTimerRef   = useRef<ReturnType<typeof setTimeout> | null>(null);
   const taskRef           = useRef(task);
 
-  const addLog = (msg: string) => setLog((l) => [`[${new Date().toLocaleTimeString()}] ${msg}`, ...l].slice(0, 50));
-
-  // Sync taskRef
-  useEffect(() => { taskRef.current = task; }, [task]);
-
   // ── Live connection probe ─────────────────────────────────────────────────
   // Web Serial has no disconnect event; we poll readPosition(1) every 2.5 s
   // when the inference loop isn't running so we don't pollute the bus.
@@ -140,7 +135,7 @@ export default function Step4Inference({ socket, sdkConnected, cameraConfig, arm
       const ok = await probeConnection();
       setLiveConnected((prev) => {
         if (prev && !ok) {
-          addLog('Robot disconnected — check USB cable.');
+          setStatusMsg('Robot disconnected. Check USB cable and reconnect in Step 1.');
           onDisconnect?.();
         }
         return ok;
@@ -185,9 +180,8 @@ export default function Step4Inference({ socket, sdkConnected, cameraConfig, arm
       try {
         await startStream(cameraConfig!.topDeviceId,   topVideoRef.current,   topStreamRef);
         await startStream(cameraConfig!.wristDeviceId, wristVideoRef.current, wristStreamRef);
-        addLog('Camera streams started.');
       } catch (e: any) {
-        addLog(`Camera error: ${e.message}`);
+        setStatusMsg(`Camera error: ${e.message}`);
       }
     }
     startStreams();
@@ -205,9 +199,8 @@ export default function Step4Inference({ socket, sdkConnected, cameraConfig, arm
 
     const onStatus = ({ status: s, message }: { status: string; message?: string }) => {
       setStatus(s as InferenceStatus);
-      if (message) { setStatusMsg(message); addLog(message); }
+      if (message) { setStatusMsg(message); }
       if (s === 'ready') {
-        addLog('Server ready — starting inference loop.');
         setRunning(true);
         runningRef.current = true;
         scheduleControlStep();
@@ -218,25 +211,15 @@ export default function Step4Inference({ socket, sdkConnected, cameraConfig, arm
       chunkBufferRef.current  = actions;
       chunkIndexRef.current   = 0;
       waitingChunkRef.current = false;
-      addLog(`Received chunk: ${actions.length} actions`);
-      // Log first action for normalization debugging
-      if (actions.length > 0) {
-        const a0 = actions[0];
-        const ticks0 = a0.slice(0, 6).map((v, i) => modelUnitsToTicks(v, i, armCalib));
-      addLog(`Action[0] raw: [${a0.slice(0,6).map((v,i)=>v.toFixed(1)+(i===5?'%':'')).join(', ')}]`);
-        addLog(`Action[0] as ticks:  [${ticks0.join(', ')}]`);
-      }
     };
 
     const onError = ({ message }: { message: string }) => {
-      addLog(`Error: ${message}`);
       setStatus('error');
       setStatusMsg(message);
       stopLoop();
     };
 
     const onStopped = () => {
-      addLog('Inference stopped.');
       setStatus('idle');
       setRunning(false);
       runningRef.current = false;
@@ -292,7 +275,6 @@ export default function Step4Inference({ socket, sdkConnected, cameraConfig, arm
       try {
         const ticks = await readAllPositions();
         state = ticks.map((t, i) => ticksToModelUnits(t, i, armCalib));
-        addLog(`Obs state: [${state.map((v, i) => v.toFixed(1) + (i === 5 ? '%' : '')).join(', ')}]  (joints -100..100, grip 0-100%)`);
       } catch {}
 
       socket.emit('obs_frame', {
@@ -303,7 +285,7 @@ export default function Step4Inference({ socket, sdkConnected, cameraConfig, arm
         wrist: new Uint8Array(wristBuf),
       });
     } catch (e: any) {
-      addLog(`Obs send error: ${e.message}`);
+      setStatusMsg(`Observation send error: ${e.message}`);
     }
   }
 
@@ -345,14 +327,10 @@ export default function Step4Inference({ socket, sdkConnected, cameraConfig, arm
                 ? (d / 100) * (calMax - calMin) + calMin
                 : ((d + 100) / 200) * (calMax - calMin) + calMin;
               const servo = Math.round(Math.max(calMin, Math.min(calMax, t)));
-              if (Math.abs(t - servo) > 1 && Math.abs(t - Math.max(calMin, Math.min(calMax, t))) > 1) {
-                addLog(`⚠ Joint ${i+1} clamped: ${d.toFixed(1)} → servo=${servo} [${calMin},${calMax}]`);
-              }
               return servo;
             });
             await writeAllPositions(ticks);
           } catch (e: any) {
-            addLog(`Servo write error: ${e.message}`);
             stopOnError(`Robot disconnected: ${e.message}`);
             return;
           }
@@ -391,7 +369,6 @@ export default function Step4Inference({ socket, sdkConnected, cameraConfig, arm
     setRunning(false);
     setStatus('error');
     setStatusMsg(msg);
-    addLog(msg);
     socket?.emit('stop_inference');
   }
 
@@ -405,18 +382,15 @@ export default function Step4Inference({ socket, sdkConnected, cameraConfig, arm
     setTestBusy(true);
     setTestLog('');
     try {
-      addLog('Test: preparing robot…');
       await resetLimitsToFull();
-      addLog('Test: ready ✓');
 
       await setTorqueAll(true);
-      addLog('Test: motors enabled ✓');
 
       let currentTicks: number[] = new Array(6).fill(2048);
       try {
         currentTicks = await readAllPositions();
       } catch (e: any) {
-        addLog(`Test warning: ${e.message}`);
+        setTestLog(`Warning: ${e.message}`);
       }
 
       // 4. Move gripper to calibrated close/open limits.
@@ -430,14 +404,12 @@ export default function Step4Inference({ socket, sdkConnected, cameraConfig, arm
       const neutralTarget   = calibMin != null && calibMax != null
         ? Math.round((calibMin + calibMax) / 2)
         : gripperCurrent;
-      addLog(`Test: gripper range min=${closeTarget} max=${openTarget} neutral=${neutralTarget}`);
 
       const write = async (gripperTicks: number, label: string) => {
         const positions = [...currentTicks];
         positions[5] = gripperTicks;
         await writeAllPositions(positions);
         setTestLog(label);
-        addLog(`Test: ${label} → gripper=${gripperTicks}`);
       };
 
       await write(closeTarget,  'Closing gripper…');
@@ -446,33 +418,29 @@ export default function Step4Inference({ socket, sdkConnected, cameraConfig, arm
       await new Promise((r) => setTimeout(r, 1200));
       await write(neutralTarget, 'Returning to neutral');
       setTestLog('✓ Done — gripper test complete.');
-      addLog('Test: complete ✓');
     } catch (e: any) {
       setTestLog(`Error: ${e.message}`);
-      addLog(`Gripper test error: ${e.message}`);
     } finally {
       setTestBusy(false);
     }
   }
 
   async function handleStart() {
-    if (!socket) { addLog('No socket connection.'); return; }
-    if (!cameraConfig) { addLog('Complete camera setup (Step 3) first.'); return; }
-    if (credits < 1) { addLog('Insufficient credits.'); return; }
-    if (!liveConnected) { addLog('Robot not connected — check USB cable.'); return; }
-    if (!armCalib)       { addLog('Arm not calibrated — complete Step 2 first.'); return; }
+    if (!socket) { setStatusMsg('No socket connection.'); return; }
+    if (!cameraConfig) { setStatusMsg('Complete camera setup (Step 3) first.'); return; }
+    if (credits < 1) { setStatusMsg('Insufficient credits.'); return; }
+    if (!liveConnected) { setStatusMsg('Robot not connected. Check USB cable and reconnect in Step 1.'); return; }
+    if (!armCalib)       { setStatusMsg('Arm not calibrated. Complete Step 2 first.'); return; }
 
-    addLog('Preparing robot…');
     try { await resetLimitsToFull(); } catch {}
-    addLog('Final safety checks…');
     try {
       await setTorqueAll(true);
-      addLog('Ready to start ✓');
     } catch (e: any) {
-      addLog(`Setup warning: ${e.message}`);
+      setStatusMsg(`Setup warning: ${e.message}`);
     }
 
     setStatus('connecting');
+    setStatusMsg('Starting inference server...');
     chunkBufferRef.current  = [];
     chunkIndexRef.current   = 0;
     waitingChunkRef.current = false;
@@ -498,7 +466,7 @@ export default function Step4Inference({ socket, sdkConnected, cameraConfig, arm
     taskRef.current = task;
     socket.emit('update_task', { task });
     setStatus('task_updated');
-    addLog(`Task updated: "${task}"`);
+    setStatusMsg(`Current task running: ${task}`);
   }
 
   const statusColor: Record<InferenceStatus, string> = {
@@ -533,6 +501,9 @@ export default function Step4Inference({ socket, sdkConnected, cameraConfig, arm
         <h1 className="text-2xl font-bold text-gray-900 mb-2">Run AI Policy</h1>
         <p className="text-gray-500 text-sm leading-relaxed">
           Describe what you want in plain English, then let the AI control the arm.
+        </p>
+        <p className="text-sm text-gray-700 mt-2">
+          Current policy: <span className="font-medium">Pi0.5_so101_finetuned</span> (more fine-tuned policies coming soon).
         </p>
       </div>
 
@@ -645,6 +616,17 @@ export default function Step4Inference({ socket, sdkConnected, cameraConfig, arm
           className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm text-gray-800 focus:outline-none focus:border-violet-400 resize-none"
           placeholder="Describe what the arm should do…"
         />
+        <p className="text-xs text-gray-500 mt-2">
+          Say something like "Go to home" to have the robot go to its starting pose.
+        </p>
+        {running && (
+          <p className="text-xs text-amber-700 mt-1">
+            Edits in this box do not affect the robot until you click Update Task.
+          </p>
+        )}
+        <div className="mt-3 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-700">
+          Current task running: <span className="font-medium">{running ? taskRef.current : 'Not running'}</span>
+        </div>
         <div className="flex items-center gap-3 mt-3">
           {!running ? (
             <button
@@ -670,6 +652,12 @@ export default function Step4Inference({ socket, sdkConnected, cameraConfig, arm
               </button>
             </>
           )}
+          <button
+            onClick={() => setShowBestPractices(true)}
+            className="px-4 py-2.5 rounded-lg border border-violet-200 text-violet-700 text-sm font-medium hover:bg-violet-50 transition-colors"
+          >
+            Best Practices
+          </button>
           <div className="ml-auto text-xs text-gray-400">
             {running && credits > 0 ? <><span className="text-green-600 font-medium">● Billing active</span> · $0.15/min</> : ''}
           </div>
@@ -682,10 +670,27 @@ export default function Step4Inference({ socket, sdkConnected, cameraConfig, arm
         )}
       </div>
 
-      {/* Log */}
-      {log.length > 0 && (
-        <div className="bg-gray-900 text-green-400 rounded-xl p-4 font-mono text-xs space-y-1 max-h-52 overflow-y-auto">
-          {log.map((l, i) => <div key={i}>{l}</div>)}
+      {showBestPractices && (
+        <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4">
+          <div className="w-full max-w-lg bg-white rounded-2xl shadow-xl border border-gray-200">
+            <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
+              <h3 className="text-base font-semibold text-gray-900">Best Practices</h3>
+              <button
+                onClick={() => setShowBestPractices(false)}
+                className="text-sm text-gray-500 hover:text-gray-700"
+              >
+                Close
+              </button>
+            </div>
+            <div className="px-5 py-4 text-sm text-gray-700 space-y-2">
+              <p>Keep people and fragile objects out of the robot workspace before running inference.</p>
+              <p>Start with short, simple tasks and stop immediately if behavior looks unsafe.</p>
+              <p>Keep one hand near the Stop button at all times while testing a new task.</p>
+              <p>Use clear task wording and update only one objective at a time for predictable behavior.</p>
+              <p>If the robot drifts or hesitates, stop, reset to a safe pose, and restart inference.</p>
+                <p>Pi0.5_so101_finetuned is best for simple pick-and-place tasks. If you have a strong task-specific policy, please share it with us.</p>
+            </div>
+          </div>
         </div>
       )}
     </div>

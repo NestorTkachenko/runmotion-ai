@@ -28,11 +28,8 @@ export default function Step2ArmCalib({ sdkConnected, onComplete }: Props) {
   const [busy,         setBusy]         = useState(false);
   const [log,          setLog]          = useState<string[]>([]);
   const [savedCalib,   setSavedCalib]   = useState<ArmCalibration | null>(null);
-  const [liveReadings, setLiveReadings] = useState<Map<number, { tick: number; model: number }> | null>(null);
-  const [liveReading,  setLiveReading]  = useState(false);
   const [midConfirmed, setMidConfirmed] = useState(false);
   const intervalRef     = useRef<ReturnType<typeof setInterval> | null>(null);
-  const liveIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const minRef          = useRef<Map<number, number>>(new Map());
   const maxRef          = useRef<Map<number, number>>(new Map());
 
@@ -45,7 +42,6 @@ export default function Step2ArmCalib({ sdkConnected, onComplete }: Props) {
     } catch {}
     return () => {
       if (intervalRef.current)     clearInterval(intervalRef.current);
-      if (liveIntervalRef.current) clearInterval(liveIntervalRef.current);
     };
   }, []);
 
@@ -142,42 +138,6 @@ export default function Step2ArmCalib({ sdkConnected, onComplete }: Props) {
 
   const rangeOK     = (id: number) => ((maxPos.get(id) ?? 0) - (minPos.get(id) ?? 4095)) >= (id === GRIPPER_ID ? GRIPPER_MIN_RANGE : MIN_RANGE);
   const allRangesOK = MOTOR_IDS.every(rangeOK);
-
-  // ── Live position debug ───────────────────────────────────────────────────
-  // EEPROM homing applied: raw ticks map directly to model units, no accumulator.
-
-  async function startLiveRead() {
-    setLiveReading(true);
-    try { await setTorqueAll(false); } catch {}
-    const capturedMin = new Map(minPos);
-    const capturedMax = new Map(maxPos);
-    const poll = async () => {
-      try {
-        const sdk    = await getSDK();
-        const posMap: Map<number, number> = await sdk.syncReadPositions(Array.from(MOTOR_IDS));
-        const out    = new Map<number, { tick: number; model: number }>();
-        for (const id of MOTOR_IDS) {
-          const tick  = posMap.get(id) ?? 2047;
-          const min   = capturedMin.get(id) ?? 0;
-          const max   = capturedMax.get(id) ?? 4095;
-          const t     = Math.max(min, Math.min(max, tick));
-          const model = id === GRIPPER_ID
-            ? ((t - min) / (max - min || 1)) * 100
-            : ((t - min) / (max - min || 1)) * 200 - 100;
-          out.set(id, { tick, model });
-        }
-        setLiveReadings(out);
-      } catch {}
-    };
-    poll();
-    liveIntervalRef.current = setInterval(poll, 200);
-  }
-
-  async function stopLiveRead() {
-    setLiveReading(false);
-    if (liveIntervalRef.current) { clearInterval(liveIntervalRef.current); liveIntervalRef.current = null; }
-    try { await setTorqueAll(true); } catch {}
-  }
 
   return (
     <div className="max-w-2xl animate-fade-in">
@@ -360,51 +320,6 @@ export default function Step2ArmCalib({ sdkConnected, onComplete }: Props) {
                 })}
               </tbody>
             </table>
-          </div>
-
-          {/* Live position debug */}
-          <div className="bg-white border border-gray-200 rounded-xl shadow-sm mb-6 overflow-hidden">
-            <div className="px-5 py-3 border-b border-gray-100 flex items-center justify-between">
-              <span className="text-sm font-semibold text-gray-800">Live position debug</span>
-              {liveReading ? (
-                <button onClick={stopLiveRead} className="text-xs text-red-500 hover:text-red-700 font-medium">Stop</button>
-              ) : (
-                <button onClick={startLiveRead} disabled={!sdkConnected} className="text-xs text-violet-600 hover:text-violet-800 font-medium disabled:opacity-40">Read live</button>
-              )}
-            </div>
-            <div className="px-5 py-2 text-xs text-gray-400 border-b border-gray-100">
-              Move the arm and verify model values. Arm joints: −100 to +100 (0 = neutral). Gripper: 0–100%.
-            </div>
-            <table className="w-full text-xs">
-              <thead className="bg-gray-50 text-gray-500">
-                <tr>
-                  <th className="text-left px-5 py-2">Joint</th>
-                  <th className="text-right px-3 py-2">Tick</th>
-                  <th className="text-right px-5 py-2">Model val</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-100">
-                {MOTOR_IDS.map((id) => {
-                  const r = liveReadings?.get(id);
-                  const modelStr   = !r ? '—' : id === GRIPPER_ID ? `${r.model.toFixed(1)}%` : r.model.toFixed(1);
-                  const modelColor = !r
-                    ? 'text-gray-300'
-                    : id === GRIPPER_ID
-                      ? (r.model >= 40 && r.model <= 60 ? 'text-green-600' : r.model < 5 || r.model > 95 ? 'text-red-500' : 'text-gray-700')
-                      : (Math.abs(r.model) <= 10 ? 'text-green-600' : Math.abs(r.model) >= 90 ? 'text-red-500' : 'text-gray-700');
-                  return (
-                    <tr key={id} className="hover:bg-gray-50">
-                      <td className="px-5 py-2.5 font-medium text-gray-700">{MOTOR_LABELS[id]}</td>
-                      <td className="text-right px-3 py-2.5 font-mono text-gray-500">{r ? r.tick : '—'}</td>
-                      <td className={`text-right px-5 py-2.5 font-mono font-semibold ${modelColor}`}>{modelStr}</td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-            {!sdkConnected && (
-              <div className="px-5 py-2 text-xs text-amber-500 border-t border-gray-100">Connect the controller in Step 1 to enable live reading.</div>
-            )}
           </div>
 
           <button

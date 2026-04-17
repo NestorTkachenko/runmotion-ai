@@ -647,7 +647,7 @@ io.on('connection', (socket) => {
 
   // ── Start inference ────────────────────────────────────────────────────────
 
-  socket.on('start_inference', async ({ task, actionsPerChunk = 50, inferenceEveryN = 20, numInferenceSteps = 5 }) => {
+  socket.on('start_inference', async ({ task, actionsPerChunk = 50, inferenceEveryN = 50, numInferenceSteps = 5 }) => {
     try {
     if (session.inferenceActive) {
       socket.emit('inference_error', { message: 'Already running inference.' });
@@ -732,8 +732,7 @@ io.on('connection', (socket) => {
   socket.on('obs_frame', (data) => {
     if (!session.inferenceActive || !session.modalClient) return;
 
-    const { ts, state, task, top, wrist } = data;
-    session.task = task || session.task;
+    const { ts, state, top, wrist } = data;
 
     session.modalClient.send({
       type:   'obs',
