@@ -28,7 +28,7 @@ export default function LandingPage() {
         <div className="hidden md:flex items-center gap-8 text-sm text-gray-400">
           <Link href="#features" className="hover:text-white transition-colors">Product</Link>
           <Link href="/pricing" className="hover:text-white transition-colors">Pricing</Link>
-          <Link href="/how-it-works" className="hover:text-white transition-colors">Docs</Link>
+          <Link href="#how-it-works" className="hover:text-white transition-colors">How it works</Link>
           <Link href="/contact" className="hover:text-white transition-colors">Contact</Link>
         </div>
 
@@ -79,7 +79,7 @@ export default function LandingPage() {
             Start for free →
           </Link>
           <Link
-            href="/how-it-works"
+            href="#how-it-works"
             className="px-7 py-3 rounded-lg border border-white/15 text-white text-sm font-medium hover:bg-white/5 transition-colors"
           >
             How it works
@@ -187,7 +187,7 @@ export default function LandingPage() {
       </section>
 
       {/* ── Steps preview ────────────────────────────────────────────────────── */}
-      <section className="py-24 px-6 md:px-12 bg-white/[0.02] border-t border-white/10">
+      <section id="how-it-works" className="py-24 px-6 md:px-12 bg-white/[0.02] border-t border-white/10">
         <div className="max-w-4xl mx-auto text-center">
           <h2 className="text-3xl md:text-4xl font-bold mb-4 gradient-text">Four steps to running AI</h2>
           <p className="text-gray-400 text-lg mb-16">Designed to get you from unboxing to inference in under 10 minutes.</p>
@@ -226,7 +226,7 @@ export default function LandingPage() {
             <span className="font-medium text-white">runmotion.ai</span>
           </div>
           <div className="flex gap-6">
-            <Link href="/how-it-works" className="hover:text-white transition-colors">Docs</Link>
+            <Link href="#how-it-works" className="hover:text-white transition-colors">How it works</Link>
             <Link href="/pricing" className="hover:text-white transition-colors">Pricing</Link>
             <Link href="/contact" className="hover:text-white transition-colors">Contact</Link>
           </div>
