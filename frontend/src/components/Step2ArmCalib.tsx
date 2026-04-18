@@ -145,8 +145,7 @@ export default function Step2ArmCalib({ sdkConnected, onComplete }: Props) {
         <div className="text-xs font-semibold uppercase tracking-widest text-violet-600 mb-2">Step 2</div>
         <h1 className="text-2xl font-bold text-gray-900 mb-2">Arm Calibration</h1>
         <p className="text-gray-500 text-sm leading-relaxed">
-          Set the arm&apos;s neutral pose (EEPROM homing → every motor reads ~2047 at neutral),
-          then sweep each joint to record its full range.
+          Set the arm&apos;s neutral pose, then sweep each joint through its full motion range.
         </p>
       </div>
 
@@ -196,8 +195,8 @@ export default function Step2ArmCalib({ sdkConnected, onComplete }: Props) {
 
           <ol className="text-sm text-gray-500 space-y-1.5 list-decimal list-inside mb-5">
             <li>Move the arm to its <strong>neutral pose</strong> — mid-range on all joints, away from hard stops.</li>
-            <li>Click <strong>Set Neutral</strong>. EEPROM homing corrections are written so every motor reads ~2047 at this pose.</li>
-            <li>Torque will be disabled so you can sweep joints freely in the next step.</li>
+            <li>Click <strong>Set Neutral</strong>.</li>
+            <li>Sweep the full arm motion in the next step.</li>
           </ol>
           <button
             onClick={handleSetNeutral}
