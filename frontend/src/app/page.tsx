@@ -99,15 +99,17 @@ export default function LandingPage() {
           </a>
         </div>
 
-        {/* Video placeholder */}
+        {/* Demo video */}
         <div className="relative mt-20 w-full max-w-4xl">
-          <div className="aspect-video rounded-2xl border border-white/10 bg-white/5 backdrop-blur flex flex-col items-center justify-center glow-violet">
-            <div className="w-16 h-16 rounded-full bg-white/10 border border-white/20 flex items-center justify-center mb-4">
-              <svg className="w-6 h-6 text-white ml-1" fill="currentColor" viewBox="0 0 24 24">
-                <path d="M8 5v14l11-7z" />
-              </svg>
-            </div>
-            <p className="text-gray-500 text-sm">Demo video coming soon</p>
+          <div className="aspect-video rounded-2xl border border-white/10 bg-black/40 backdrop-blur overflow-hidden glow-violet">
+            <video
+              src="/RunMotionClip.mp4"
+              autoPlay
+              muted
+              loop
+              playsInline
+              className="w-full h-full object-cover"
+            />
           </div>
         </div>
       </section>
