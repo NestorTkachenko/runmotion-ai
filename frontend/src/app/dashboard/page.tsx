@@ -57,6 +57,7 @@ export default function DashboardPage() {
 
   // Socket
   const socketRef = useRef<Socket | null>(null);
+  const prevStepRef = useRef<StepNum>(1);
 
   useEffect(() => {
     const token = typeof window !== 'undefined' ? localStorage.getItem('runmotion_token') : null;
@@ -80,6 +81,16 @@ export default function DashboardPage() {
       sock.off('credits_update');
     };
   }, [router]);
+
+  // Leaving Step 4 should always stop inference, even if Step4 component
+  // unmount timing races with socket/event cleanup.
+  useEffect(() => {
+    const prev = prevStepRef.current;
+    if (prev === 4 && activeStep !== 4) {
+      socketRef.current?.emit('stop_inference');
+    }
+    prevStepRef.current = activeStep;
+  }, [activeStep]);
 
   const markComplete = useCallback((step: StepNum) => {
     setCompleted((prev) => {

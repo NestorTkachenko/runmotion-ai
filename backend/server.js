@@ -649,9 +649,11 @@ io.on('connection', (socket) => {
 
   socket.on('start_inference', async ({ task, actionsPerChunk = 50, inferenceEveryN = 50, numInferenceSteps = 5 }) => {
     try {
-    if (session.inferenceActive) {
-      socket.emit('inference_error', { message: 'Already running inference.' });
-      return;
+    // Recover from stale state (e.g., UI changed steps without clean stop).
+    // Start is treated as idempotent for the same user session.
+    if (session.inferenceActive || session.modalClient) {
+      console.warn(`[modal] ${userId} start_inference requested while active; recycling previous session`);
+      stopInference(session, socket);
     }
     if (session.credits < BILLING_RATE_CENTS_PER_SEC) {
       socket.emit('inference_error', { message: 'Insufficient credits.' });
@@ -756,7 +758,7 @@ io.on('connection', (socket) => {
   // ── Stop inference ────────────────────────────────────────────────────────
 
   socket.on('stop_inference', () => {
-    if (!session.inferenceActive) return;
+    if (!session.inferenceActive && !session.modalClient) return;
     stopInference(session, socket);
   });
 
@@ -766,7 +768,7 @@ io.on('connection', (socket) => {
     console.log(`[ws] ${userId} disconnected`);
     session.socketId = null;
     // Keep session alive for reconnect; stop inference & billing cleanly
-    if (session.inferenceActive) {
+    if (session.inferenceActive || session.modalClient) {
       stopInference(session, socket);
     }
   });

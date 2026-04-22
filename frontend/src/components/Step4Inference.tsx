@@ -461,6 +461,15 @@ export default function Step4Inference({ socket, sdkConnected, cameraConfig, arm
     socket.emit('stop_inference');
   }
 
+  // If user navigates away from Step 4, always stop inference server-side.
+  useEffect(() => {
+    return () => {
+      stopLoop();
+      socket?.emit('stop_inference');
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [socket]);
+
   function handleUpdateTask() {
     if (!socket) return;
     taskRef.current = task;
